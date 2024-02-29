@@ -76,6 +76,7 @@
           gotests
           ksh
           ko
+          yq-go
 
           # 'dot' is needed for pprof graphs
           # go tool pprof -http=: <source>
