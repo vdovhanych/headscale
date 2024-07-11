@@ -1,4 +1,4 @@
-name: GitHub Actions Version Updater
+name: Automation - Update GitHub Actions versions
 
 on:
   schedule:
@@ -9,7 +9,6 @@ jobs:
   build:
     if: github.repository == 'juanfont/headscale'
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
         with:

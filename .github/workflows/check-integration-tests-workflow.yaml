@@ -1,4 +1,4 @@
-name: Check integration tests workflow
+name: Check - Integration tests workflow
 
 on: [pull_request]
 
