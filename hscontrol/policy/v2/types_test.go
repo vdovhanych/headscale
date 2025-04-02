@@ -359,7 +359,7 @@ func TestUnmarshalPolicy(t *testing.T) {
 	],
 }
 `,
-			wantErr: `AutoGroup is invalid, got: "autogroup:invalid", must be one of [autogroup:internet]`,
+			wantErr: `AutoGroup is invalid, got: "autogroup:invalid", must be one of [autogroup:internet autogroup:self autogroup:member autogroup:tagged autogroup:nonroot autogroup:danger-all]`,
 		},
 		{
 			name: "undefined-hostname-errors-2490",
@@ -764,6 +764,116 @@ func TestResolvePolicy(t *testing.T) {
 			name:      "wildcard-alias",
 			toResolve: Wildcard,
 			want:      []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
+		},
+		{
+			name:      "autogroup-self",
+			toResolve: ptr.To(AutoGroup(AutoGroupSelf)),
+			nodes: types.Nodes{
+				{
+					User: users["testuser"],
+					IPv4: ap("100.100.101.1"),
+				},
+				{
+					User: users["testuser"],
+					IPv4: ap("100.100.101.2"),
+				},
+				{
+					User: users["notme"],
+					IPv4: ap("100.100.101.3"),
+				},
+			},
+			want: []netip.Prefix{mp("100.100.101.1/32"), mp("100.100.101.2/32")},
+		},
+		{
+			name:      "autogroup-member-basic",
+			toResolve: ptr.To(AutoGroup(AutoGroupMember)),
+			nodes: types.Nodes{
+				{
+					User: users["testuser"],
+					IPv4: ap("100.100.101.1"),
+				},
+				{
+					User:       users["testuser"],
+					ForcedTags: []string{"tag:test"},
+					IPv4:       ap("100.100.101.2"),
+				},
+				{
+					User: users["testuser"],
+					Hostinfo: &tailcfg.Hostinfo{
+						RequestTags: []string{"tag:test"},
+					},
+					IPv4: ap("100.100.101.3"),
+				},
+				{
+					User: users["notme"],
+					IPv4: ap("100.100.101.4"),
+				},
+			},
+			want: []netip.Prefix{mp("100.100.101.1/32"), mp("100.100.101.4/32")},
+		},
+		{
+			name:      "autogroup-member-multiple-users",
+			toResolve: ptr.To(AutoGroup(AutoGroupMember)),
+			nodes: types.Nodes{
+				{
+					User: users["user1"],
+					IPv4: ap("100.100.101.1"),
+				},
+				{
+					User: users["user2"],
+					IPv4: ap("100.100.101.2"),
+				},
+				{
+					User:       users["user3"],
+					ForcedTags: []string{"tag:test"},
+					IPv4:       ap("100.100.101.3"),
+				},
+				{
+					User: users["user4"],
+					Hostinfo: &tailcfg.Hostinfo{
+						RequestTags: []string{"tag:test"},
+					},
+					IPv4: ap("100.100.101.4"),
+				},
+			},
+			want: []netip.Prefix{mp("100.100.101.1/32"), mp("100.100.101.2/32")},
+		},
+		{
+			name:      "autogroup-tagged",
+			toResolve: ptr.To(AutoGroup(AutoGroupTagged)),
+			nodes: types.Nodes{
+				{
+					User: users["testuser"],
+					IPv4: ap("100.100.101.1"),
+				},
+				{
+					User:       users["testuser"],
+					ForcedTags: []string{"tag:test"},
+					IPv4:       ap("100.100.101.2"),
+				},
+				{
+					User: users["testuser"],
+					Hostinfo: &tailcfg.Hostinfo{
+						RequestTags: []string{"tag:test"},
+					},
+					IPv4: ap("100.100.101.3"),
+				},
+				{
+					User: users["notme"],
+					IPv4: ap("100.100.101.4"),
+				},
+			},
+			want: []netip.Prefix{mp("100.100.101.2/31")},
+		},
+		{
+			name:      "autogroup-danger-all",
+			toResolve: ptr.To(AutoGroup(AutoGroupDangerAll)),
+			want:      []netip.Prefix{mp("0.0.0.0/0"), mp("::/0")},
+		},
+		{
+			name:      "autogroup-invalid",
+			toResolve: ptr.To(AutoGroup("autogroup:invalid")),
+			wantErr:   "unknown autogroup",
 		},
 	}
 
