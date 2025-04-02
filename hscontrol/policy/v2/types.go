@@ -373,10 +373,22 @@ func (p Prefix) Resolve(_ *Policy, _ types.Users, nodes types.Nodes) (*netipx.IP
 type AutoGroup string
 
 const (
-	AutoGroupInternet = "autogroup:internet"
+	AutoGroupInternet  = "autogroup:internet"
+	AutoGroupSelf      = "autogroup:self"
+	AutoGroupMember    = "autogroup:member"
+	AutoGroupTagged    = "autogroup:tagged"
+	AutoGroupNonRoot   = "autogroup:nonroot"
+	AutoGroupDangerAll = "autogroup:danger-all"
 )
 
-var autogroups = []string{AutoGroupInternet}
+var autogroups = []string{
+	AutoGroupInternet,
+	AutoGroupSelf,
+	AutoGroupMember,
+	AutoGroupTagged,
+	AutoGroupNonRoot,
+	AutoGroupDangerAll,
+}
 
 func (ag AutoGroup) Validate() error {
 	for _, valid := range autogroups {
@@ -396,13 +408,60 @@ func (ag *AutoGroup) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (ag AutoGroup) Resolve(_ *Policy, _ types.Users, _ types.Nodes) (*netipx.IPSet, error) {
-	switch ag {
+func (ag AutoGroup) Resolve(_ *Policy, users types.Users, nodes types.Nodes) (*netipx.IPSet, error) {
+	var build netipx.IPSetBuilder
+
+	switch string(ag) {
 	case AutoGroupInternet:
 		return util.TheInternet(), nil
-	}
 
-	return nil, nil
+	case AutoGroupSelf:
+		if len(nodes) == 0 {
+			return build.IPSet()
+		}
+		currentUser := nodes[0].User
+		for _, node := range nodes {
+			if node.User.ID == currentUser.ID {
+				node.AppendToIPSet(&build)
+			}
+		}
+		return build.IPSet()
+
+	case AutoGroupMember:
+		// autogroup:member represents all untagged devices in the tailnet.
+		for _, node := range nodes {
+			if len(node.ForcedTags) != 0 {
+				continue
+			}
+			if node.Hostinfo != nil && len(node.Hostinfo.RequestTags) != 0 {
+				continue
+			}
+			node.AppendToIPSet(&build)
+		}
+		return build.IPSet()
+
+	case AutoGroupTagged:
+		for _, node := range nodes {
+			if len(node.ForcedTags) != 0 {
+				for _, ip := range node.IPs() {
+					build.Add(ip)
+				}
+				continue
+			}
+			if node.Hostinfo != nil && len(node.Hostinfo.RequestTags) != 0 {
+				for _, ip := range node.IPs() {
+					build.Add(ip)
+				}
+			}
+		}
+		return build.IPSet()
+
+	case AutoGroupDangerAll:
+		return allIPs(), nil
+
+	default:
+		return nil, fmt.Errorf("unknown autogroup %q", ag)
+	}
 }
 
 type Alias interface {
@@ -1003,3 +1062,18 @@ func policyFromBytes(b []byte) (*Policy, error) {
 const (
 	expectedTokenItems = 2
 )
+
+var allIPSet *netipx.IPSet
+
+func allIPs() *netipx.IPSet {
+	if allIPSet != nil {
+		return allIPSet
+	}
+
+	var build netipx.IPSetBuilder
+	build.AddPrefix(netip.MustParsePrefix("::/0"))
+	build.AddPrefix(netip.MustParsePrefix("0.0.0.0/0"))
+
+	allTheIps, _ := build.IPSet()
+	return allTheIps
+}
