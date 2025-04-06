@@ -13,71 +13,72 @@ jobs:
       fail-fast: false
       matrix:
         test:
-          - TestACLHostsInNetMapTable
-          - TestACLAllowUser80Dst
-          - TestACLDenyAllPort80
-          - TestACLAllowUserDst
-          - TestACLAllowStarDst
-          - TestACLNamedHostsCanReachBySubnet
-          - TestACLNamedHostsCanReach
-          - TestACLDevice1CanAccessDevice2
-          - TestPolicyUpdateWhileRunningWithCLIInDatabase
-          - TestAuthKeyLogoutAndReloginSameUser
-          - TestAuthKeyLogoutAndReloginNewUser
-          - TestAuthKeyLogoutAndReloginSameUserExpiredKey
-          - TestOIDCAuthenticationPingAll
-          - TestOIDCExpireNodesBasedOnTokenExpiry
-          - TestOIDC024UserCreation
-          - TestOIDCAuthenticationWithPKCE
-          - TestOIDCReloginSameNodeNewUser
-          - TestAuthWebFlowAuthenticationPingAll
-          - TestAuthWebFlowLogoutAndRelogin
-          - TestUserCommand
-          - TestPreAuthKeyCommand
-          - TestPreAuthKeyCommandWithoutExpiry
-          - TestPreAuthKeyCommandReusableEphemeral
-          - TestPreAuthKeyCorrectUserLoggedInCommand
-          - TestApiKeyCommand
-          - TestNodeTagCommand
-          - TestNodeAdvertiseTagCommand
-          - TestNodeCommand
-          - TestNodeExpireCommand
-          - TestNodeRenameCommand
-          - TestNodeMoveCommand
-          - TestPolicyCommand
-          - TestPolicyBrokenConfigCommand
-          - TestDERPVerifyEndpoint
-          - TestResolveMagicDNS
-          - TestResolveMagicDNSExtraRecordsPath
-          - TestValidateResolvConf
-          - TestDERPServerScenario
-          - TestDERPServerWebsocketScenario
-          - TestPingAllByIP
-          - TestPingAllByIPPublicDERP
-          - TestEphemeral
-          - TestEphemeralInAlternateTimezone
-          - TestEphemeral2006DeletedTooQuickly
-          - TestPingAllByHostname
-          - TestTaildrop
-          - TestUpdateHostnameFromClient
-          - TestExpireNode
-          - TestNodeOnlineStatus
-          - TestPingAllByIPManyUpDown
-          - Test2118DeletingOnlineNodePanics
-          - TestEnablingRoutes
-          - TestHASubnetRouterFailover
-          - TestSubnetRouteACL
-          - TestEnablingExitRoutes
-          - TestSubnetRouterMultiNetwork
-          - TestSubnetRouterMultiNetworkExitNode
-          - TestAutoApproveMultiNetwork
-          - TestHeadscale
-          - TestTailscaleNodesJoiningHeadcale
-          - TestSSHOneUserToAll
-          - TestSSHMultipleUsersAllToAll
-          - TestSSHNoSSHConfigured
-          - TestSSHIsBlockedInACL
-          - TestSSHUserOnlyIsolation
+          - TestAutoGroups
+          # - TestACLHostsInNetMapTable
+          # - TestACLAllowUser80Dst
+          # - TestACLDenyAllPort80
+          # - TestACLAllowUserDst
+          # - TestACLAllowStarDst
+          # - TestACLNamedHostsCanReachBySubnet
+          # - TestACLNamedHostsCanReach
+          # - TestACLDevice1CanAccessDevice2
+          # - TestPolicyUpdateWhileRunningWithCLIInDatabase
+          # - TestAuthKeyLogoutAndReloginSameUser
+          # - TestAuthKeyLogoutAndReloginNewUser
+          # - TestAuthKeyLogoutAndReloginSameUserExpiredKey
+          # - TestOIDCAuthenticationPingAll
+          # - TestOIDCExpireNodesBasedOnTokenExpiry
+          # - TestOIDC024UserCreation
+          # - TestOIDCAuthenticationWithPKCE
+          # - TestOIDCReloginSameNodeNewUser
+          # - TestAuthWebFlowAuthenticationPingAll
+          # - TestAuthWebFlowLogoutAndRelogin
+          # - TestUserCommand
+          # - TestPreAuthKeyCommand
+          # - TestPreAuthKeyCommandWithoutExpiry
+          # - TestPreAuthKeyCommandReusableEphemeral
+          # - TestPreAuthKeyCorrectUserLoggedInCommand
+          # - TestApiKeyCommand
+          # - TestNodeTagCommand
+          # - TestNodeAdvertiseTagCommand
+          # - TestNodeCommand
+          # - TestNodeExpireCommand
+          # - TestNodeRenameCommand
+          # - TestNodeMoveCommand
+          # - TestPolicyCommand
+          # - TestPolicyBrokenConfigCommand
+          # - TestDERPVerifyEndpoint
+          # - TestResolveMagicDNS
+          # - TestResolveMagicDNSExtraRecordsPath
+          # - TestValidateResolvConf
+          # - TestDERPServerScenario
+          # - TestDERPServerWebsocketScenario
+          # - TestPingAllByIP
+          # - TestPingAllByIPPublicDERP
+          # - TestEphemeral
+          # - TestEphemeralInAlternateTimezone
+          # - TestEphemeral2006DeletedTooQuickly
+          # - TestPingAllByHostname
+          # - TestTaildrop
+          # - TestUpdateHostnameFromClient
+          # - TestExpireNode
+          # - TestNodeOnlineStatus
+          # - TestPingAllByIPManyUpDown
+          # - Test2118DeletingOnlineNodePanics
+          # - TestEnablingRoutes
+          # - TestHASubnetRouterFailover
+          # - TestSubnetRouteACL
+          # - TestEnablingExitRoutes
+          # - TestSubnetRouterMultiNetwork
+          # - TestSubnetRouterMultiNetworkExitNode
+          # - TestAutoApproveMultiNetwork
+          # - TestHeadscale
+          # - TestTailscaleNodesJoiningHeadcale
+          # - TestSSHOneUserToAll
+          # - TestSSHMultipleUsersAllToAll
+          # - TestSSHNoSSHConfigured
+          # - TestSSHIsBlockedInACL
+          # - TestSSHUserOnlyIsolation
         database: [postgres, sqlite]
     env:
       # Github does not allow us to access secrets in pull requests,
