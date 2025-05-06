@@ -1139,3 +1139,218 @@ func TestPolicyUpdateWhileRunningWithCLIInDatabase(t *testing.T) {
 		}
 	}
 }
+
+func TestACLAutogroupSelf(t *testing.T) {
+	IntegrationSkip(t)
+	t.Parallel()
+
+	scenario := aclScenario(t,
+		&policyv1.ACLPolicy{
+			ACLs: []policyv1.ACL{
+				{
+					Action:       "accept",
+					Sources:      []string{"autogroup:self"},
+					Destinations: []string{"autogroup:self:*"},
+				},
+			},
+		},
+		2,
+	)
+	defer scenario.ShutdownAssertNoPanics(t)
+
+	user1Clients, err := scenario.ListTailscaleClients("user1")
+	require.NoError(t, err)
+
+	user2Clients, err := scenario.ListTailscaleClients("user2")
+	require.NoError(t, err)
+
+	err = scenario.WaitForTailscaleSync()
+	require.NoError(t, err)
+
+	// Test that user1 can access their own nodes
+	for _, client := range user1Clients {
+		for _, peer := range user1Clients {
+			if client.Hostname() == peer.Hostname() {
+				continue
+			}
+			fqdn, err := peer.FQDN()
+			require.NoError(t, err)
+
+			url := fmt.Sprintf("http://%s/etc/hostname", fqdn)
+			t.Logf("url from %s to %s", client.Hostname(), url)
+
+			result, err := client.Curl(url)
+			assert.Len(t, result, 13)
+			require.NoError(t, err)
+		}
+
+		// Test that user1 cannot access user2's nodes
+		for _, peer := range user2Clients {
+			fqdn, err := peer.FQDN()
+			require.NoError(t, err)
+
+			url := fmt.Sprintf("http://%s/etc/hostname", fqdn)
+			t.Logf("url from %s to %s", client.Hostname(), url)
+
+			result, err := client.Curl(url)
+			assert.Empty(t, result)
+			require.Error(t, err)
+		}
+	}
+}
+
+func TestACLAutogroupMember(t *testing.T) {
+	IntegrationSkip(t)
+	t.Parallel()
+
+	scenario := aclScenario(t,
+		&policyv1.ACLPolicy{
+			ACLs: []policyv1.ACL{
+				{
+					Action:       "accept",
+					Sources:      []string{"autogroup:member"},
+					Destinations: []string{"autogroup:member:*"},
+				},
+			},
+		},
+		2,
+	)
+	defer scenario.ShutdownAssertNoPanics(t)
+
+	allClients, err := scenario.ListTailscaleClients()
+	require.NoError(t, err)
+
+	err = scenario.WaitForTailscaleSync()
+	require.NoError(t, err)
+
+	// Test that untagged nodes can access each other
+	for _, client := range allClients {
+		status, err := client.Status()
+		require.NoError(t, err)
+		if status.Self.Tags != nil && status.Self.Tags.Len() > 0 {
+			continue
+		}
+
+		for _, peer := range allClients {
+			if client.Hostname() == peer.Hostname() {
+				continue
+			}
+
+			status, err := peer.Status()
+			require.NoError(t, err)
+			if status.Self.Tags != nil && status.Self.Tags.Len() > 0 {
+				continue
+			}
+
+			fqdn, err := peer.FQDN()
+			require.NoError(t, err)
+
+			url := fmt.Sprintf("http://%s/etc/hostname", fqdn)
+			t.Logf("url from %s to %s", client.Hostname(), url)
+
+			result, err := client.Curl(url)
+			assert.Len(t, result, 13)
+			require.NoError(t, err)
+		}
+	}
+}
+
+func TestACLAutogroupTagged(t *testing.T) {
+	IntegrationSkip(t)
+	t.Parallel()
+
+	scenario := aclScenario(t,
+		&policyv1.ACLPolicy{
+			ACLs: []policyv1.ACL{
+				{
+					Action:       "accept",
+					Sources:      []string{"autogroup:tagged"},
+					Destinations: []string{"autogroup:tagged:*"},
+				},
+			},
+		},
+		2,
+	)
+	defer scenario.ShutdownAssertNoPanics(t)
+
+	allClients, err := scenario.ListTailscaleClients()
+	require.NoError(t, err)
+
+	err = scenario.WaitForTailscaleSync()
+	require.NoError(t, err)
+
+	// Test that tagged nodes can access each other
+	for _, client := range allClients {
+		status, err := client.Status()
+		require.NoError(t, err)
+		if status.Self.Tags == nil || status.Self.Tags.Len() == 0 {
+			continue
+		}
+
+		for _, peer := range allClients {
+			if client.Hostname() == peer.Hostname() {
+				continue
+			}
+
+			status, err := peer.Status()
+			require.NoError(t, err)
+			if status.Self.Tags == nil || status.Self.Tags.Len() == 0 {
+				continue
+			}
+
+			fqdn, err := peer.FQDN()
+			require.NoError(t, err)
+
+			url := fmt.Sprintf("http://%s/etc/hostname", fqdn)
+			t.Logf("url from %s to %s", client.Hostname(), url)
+
+			result, err := client.Curl(url)
+			assert.Len(t, result, 13)
+			require.NoError(t, err)
+		}
+	}
+}
+
+func TestACLAutogroupDangerAll(t *testing.T) {
+	IntegrationSkip(t)
+	t.Parallel()
+
+	scenario := aclScenario(t,
+		&policyv1.ACLPolicy{
+			ACLs: []policyv1.ACL{
+				{
+					Action:       "accept",
+					Sources:      []string{"autogroup:danger-all"},
+					Destinations: []string{"*:*"},
+				},
+			},
+		},
+		2,
+	)
+	defer scenario.ShutdownAssertNoPanics(t)
+
+	allClients, err := scenario.ListTailscaleClients()
+	require.NoError(t, err)
+
+	err = scenario.WaitForTailscaleSync()
+	require.NoError(t, err)
+
+	// Test that nodes can access any IP
+	for _, client := range allClients {
+		// Try to access a public IP
+		url := "http://1.1.1.1"
+		t.Logf("url from %s to %s", client.Hostname(), url)
+
+		result, err := client.Curl(url)
+		assert.NotEmpty(t, result)
+		require.NoError(t, err)
+
+		// Try to access a private IP
+		url = "http://192.168.1.1"
+		t.Logf("url from %s to %s", client.Hostname(), url)
+
+		result, err = client.Curl(url)
+		assert.NotEmpty(t, result)
+		require.NoError(t, err)
+	}
+}
