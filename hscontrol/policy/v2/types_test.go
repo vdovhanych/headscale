@@ -359,7 +359,7 @@ func TestUnmarshalPolicy(t *testing.T) {
 	],
 }
 `,
-			wantErr: `AutoGroup is invalid, got: "autogroup:invalid", must be one of [autogroup:internet autogroup:self autogroup:member autogroup:tagged autogroup:nonroot autogroup:danger-all]`,
+			wantErr: `AutoGroup is invalid, got: "autogroup:invalid", must be one of [autogroup:internet autogroup:self autogroup:member autogroup:tagged autogroup:nonroot]`,
 		},
 		{
 			name: "undefined-hostname-errors-2490",

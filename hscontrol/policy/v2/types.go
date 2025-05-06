@@ -382,12 +382,11 @@ func (p Prefix) Resolve(_ *Policy, _ types.Users, nodes types.Nodes) (*netipx.IP
 type AutoGroup string
 
 const (
-	AutoGroupSelf      AutoGroup = "autogroup:self"
-	AutoGroupMember    AutoGroup = "autogroup:member"
-	AutoGroupInternet  AutoGroup = "autogroup:internet"
-	AutoGroupTagged    AutoGroup = "autogroup:tagged"
-	AutoGroupNonRoot   AutoGroup = "autogroup:nonroot"
-	AutoGroupDangerAll AutoGroup = "autogroup:danger-all"
+	AutoGroupSelf     AutoGroup = "autogroup:self"
+	AutoGroupMember   AutoGroup = "autogroup:member"
+	AutoGroupInternet AutoGroup = "autogroup:internet"
+	AutoGroupTagged   AutoGroup = "autogroup:tagged"
+	AutoGroupNonRoot  AutoGroup = "autogroup:nonroot"
 )
 
 var autogroups = []AutoGroup{
@@ -396,7 +395,6 @@ var autogroups = []AutoGroup{
 	AutoGroupMember,
 	AutoGroupTagged,
 	AutoGroupNonRoot,
-	AutoGroupDangerAll,
 }
 
 func (ag AutoGroup) Validate() error {
@@ -432,6 +430,7 @@ func (ag AutoGroup) Resolve(p *Policy, users types.Users, nodes types.Nodes) (*n
 				node.AppendToIPSet(&build)
 			}
 		}
+
 		return build.IPSet()
 
 	case AutoGroupMember:
@@ -445,6 +444,7 @@ func (ag AutoGroup) Resolve(p *Policy, users types.Users, nodes types.Nodes) (*n
 			}
 			node.AppendToIPSet(&build)
 		}
+
 		return build.IPSet()
 
 	case AutoGroupTagged:
@@ -457,6 +457,7 @@ func (ag AutoGroup) Resolve(p *Policy, users types.Users, nodes types.Nodes) (*n
 				node.AppendToIPSet(&build)
 			}
 		}
+
 		return build.IPSet()
 
 	case AutoGroupNonRoot:
@@ -466,10 +467,8 @@ func (ag AutoGroup) Resolve(p *Policy, users types.Users, nodes types.Nodes) (*n
 				node.AppendToIPSet(&build)
 			}
 		}
-		return build.IPSet()
 
-	case AutoGroupDangerAll:
-		return allIPs(), nil
+		return build.IPSet()
 
 	default:
 		return nil, fmt.Errorf("unknown autogroup %q", ag)
@@ -980,10 +979,10 @@ type Policy struct {
 }
 
 var (
-	autogroupForSrc       = []AutoGroup{AutoGroupDangerAll, AutoGroupSelf, AutoGroupMember, AutoGroupTagged}
-	autogroupForDst       = []AutoGroup{AutoGroupInternet, AutoGroupDangerAll, AutoGroupSelf, AutoGroupMember, AutoGroupTagged}
-	autogroupForSSHSrc    = []AutoGroup{AutoGroupDangerAll, AutoGroupSelf, AutoGroupMember, AutoGroupTagged}
-	autogroupForSSHDst    = []AutoGroup{AutoGroupDangerAll, AutoGroupSelf, AutoGroupMember, AutoGroupTagged}
+	autogroupForSrc       = []AutoGroup{AutoGroupSelf, AutoGroupMember, AutoGroupTagged}
+	autogroupForDst       = []AutoGroup{AutoGroupInternet, AutoGroupSelf, AutoGroupMember, AutoGroupTagged}
+	autogroupForSSHSrc    = []AutoGroup{AutoGroupSelf, AutoGroupMember, AutoGroupTagged}
+	autogroupForSSHDst    = []AutoGroup{AutoGroupSelf, AutoGroupMember, AutoGroupTagged}
 	autogroupForSSHUser   = []AutoGroup{AutoGroupNonRoot}
 	autogroupNotSupported = []AutoGroup{}
 )
@@ -1315,5 +1314,6 @@ func allIPs() *netipx.IPSet {
 	build.AddPrefix(netip.MustParsePrefix("0.0.0.0/0"))
 
 	allTheIps, _ := build.IPSet()
+
 	return allTheIps
 }
