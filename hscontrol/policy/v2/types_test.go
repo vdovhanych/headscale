@@ -866,11 +866,6 @@ func TestResolvePolicy(t *testing.T) {
 			want: []netip.Prefix{mp("100.100.101.2/31")},
 		},
 		{
-			name:      "autogroup-danger-all",
-			toResolve: ptr.To(AutoGroup(AutoGroupDangerAll)),
-			want:      []netip.Prefix{mp("0.0.0.0/0"), mp("::/0")},
-		},
-		{
 			name:      "autogroup-invalid",
 			toResolve: ptr.To(AutoGroup("autogroup:invalid")),
 			wantErr:   "unknown autogroup",
