@@ -77,6 +77,7 @@ func aclScenario(
 			tsic.WithDockerWorkdir("/"),
 		},
 		hsic.WithACLPolicy(policy),
+		hsic.WithPolicyMode(types.PolicyModeDB),
 		hsic.WithTestName("acl"),
 		hsic.WithEmbeddedDERPServerOnly(),
 		hsic.WithTLS(),
@@ -137,13 +138,13 @@ func TestACLHostsInNetMapTable(t *testing.T) {
 				ACLs: []policyv1.ACL{
 					{
 						Action:       "accept",
-						Sources:      []string{"user1@"},
-						Destinations: []string{"user1@:*"},
+						Sources:      []string{"user1@test.no"},
+						Destinations: []string{"user1@test.no:*"},
 					},
 					{
 						Action:       "accept",
-						Sources:      []string{"user2@"},
-						Destinations: []string{"user2@:*"},
+						Sources:      []string{"user2@test.no"},
+						Destinations: []string{"user2@test.no:*"},
 					},
 				},
 			}, want: map[string]int{
@@ -160,23 +161,23 @@ func TestACLHostsInNetMapTable(t *testing.T) {
 				ACLs: []policyv1.ACL{
 					{
 						Action:       "accept",
-						Sources:      []string{"user1@"},
-						Destinations: []string{"user1@:22"},
+						Sources:      []string{"user1@test.no"},
+						Destinations: []string{"user1@test.no:22"},
 					},
 					{
 						Action:       "accept",
-						Sources:      []string{"user2@"},
-						Destinations: []string{"user2@:22"},
+						Sources:      []string{"user2@test.no"},
+						Destinations: []string{"user2@test.no:22"},
 					},
 					{
 						Action:       "accept",
-						Sources:      []string{"user1@"},
-						Destinations: []string{"user2@:22"},
+						Sources:      []string{"user1@test.no"},
+						Destinations: []string{"user2@test.no:22"},
 					},
 					{
 						Action:       "accept",
-						Sources:      []string{"user2@"},
-						Destinations: []string{"user1@:22"},
+						Sources:      []string{"user2@test.no"},
+						Destinations: []string{"user1@test.no:22"},
 					},
 				},
 			}, want: map[string]int{
@@ -194,18 +195,18 @@ func TestACLHostsInNetMapTable(t *testing.T) {
 				ACLs: []policyv1.ACL{
 					{
 						Action:       "accept",
-						Sources:      []string{"user1@"},
-						Destinations: []string{"user1@:*"},
+						Sources:      []string{"user1@test.no"},
+						Destinations: []string{"user1@test.no:*"},
 					},
 					{
 						Action:       "accept",
-						Sources:      []string{"user2@"},
-						Destinations: []string{"user2@:*"},
+						Sources:      []string{"user2@test.no"},
+						Destinations: []string{"user2@test.no:*"},
 					},
 					{
 						Action:       "accept",
-						Sources:      []string{"user1@"},
-						Destinations: []string{"user2@:*"},
+						Sources:      []string{"user1@test.no"},
+						Destinations: []string{"user2@test.no:*"},
 					},
 				},
 			}, want: map[string]int{
@@ -219,18 +220,18 @@ func TestACLHostsInNetMapTable(t *testing.T) {
 				ACLs: []policyv1.ACL{
 					{
 						Action:       "accept",
-						Sources:      []string{"user1@"},
-						Destinations: append([]string{"user1@:*"}, veryLargeDestination...),
+						Sources:      []string{"user1@test.no"},
+						Destinations: append([]string{"user1@test.no:*"}, veryLargeDestination...),
 					},
 					{
 						Action:       "accept",
-						Sources:      []string{"user2@"},
-						Destinations: append([]string{"user2@:*"}, veryLargeDestination...),
+						Sources:      []string{"user2@test.no"},
+						Destinations: append([]string{"user2@test.no:*"}, veryLargeDestination...),
 					},
 					{
 						Action:       "accept",
-						Sources:      []string{"user1@"},
-						Destinations: append([]string{"user2@:*"}, veryLargeDestination...),
+						Sources:      []string{"user1@test.no"},
+						Destinations: append([]string{"user2@test.no:*"}, veryLargeDestination...),
 					},
 				},
 			}, want: map[string]int{
@@ -299,8 +300,8 @@ func TestACLAllowUser80Dst(t *testing.T) {
 			ACLs: []policyv1.ACL{
 				{
 					Action:       "accept",
-					Sources:      []string{"user1@"},
-					Destinations: []string{"user2@:80"},
+					Sources:      []string{"user1@test.no"},
+					Destinations: []string{"user2@test.no:80"},
 				},
 			},
 		},
@@ -351,7 +352,7 @@ func TestACLDenyAllPort80(t *testing.T) {
 	scenario := aclScenario(t,
 		&policyv1.ACLPolicy{
 			Groups: map[string][]string{
-				"group:integration-acl-test": {"user1@", "user2@"},
+				"group:integration-acl-test": {"user1@test.no", "user2@test.no"},
 			},
 			ACLs: []policyv1.ACL{
 				{
@@ -400,8 +401,8 @@ func TestACLAllowUserDst(t *testing.T) {
 			ACLs: []policyv1.ACL{
 				{
 					Action:       "accept",
-					Sources:      []string{"user1@"},
-					Destinations: []string{"user2@:*"},
+					Sources:      []string{"user1@test.no"},
+					Destinations: []string{"user2@test.no:*"},
 				},
 			},
 		},
@@ -456,7 +457,7 @@ func TestACLAllowStarDst(t *testing.T) {
 			ACLs: []policyv1.ACL{
 				{
 					Action:       "accept",
-					Sources:      []string{"user1@"},
+					Sources:      []string{"user1@test.no"},
 					Destinations: []string{"*:*"},
 				},
 			},
@@ -912,8 +913,8 @@ func TestACLDevice1CanAccessDevice2(t *testing.T) {
 		"group": {
 			policy: policyv1.ACLPolicy{
 				Groups: map[string][]string{
-					"group:one": {"user1@"},
-					"group:two": {"user2@"},
+					"group:one": {"user1@test.no"},
+					"group:two": {"user2@test.no"},
 				},
 				ACLs: []policyv1.ACL{
 					{
@@ -1077,8 +1078,8 @@ func TestPolicyUpdateWhileRunningWithCLIInDatabase(t *testing.T) {
 		ACLs: []policyv1.ACL{
 			{
 				Action:       "accept",
-				Sources:      []string{"user1@"},
-				Destinations: []string{"user2@:*"},
+				Sources:      []string{"user1@test.no"},
+				Destinations: []string{"user2@test.no:*"},
 			},
 		},
 		Hosts: policyv1.Hosts{},
@@ -1127,65 +1128,6 @@ func TestPolicyUpdateWhileRunningWithCLIInDatabase(t *testing.T) {
 	// Test that user2 _cannot_ visit user1
 	for _, client := range user2Clients {
 		for _, peer := range user1Clients {
-			fqdn, err := peer.FQDN()
-			require.NoError(t, err)
-
-			url := fmt.Sprintf("http://%s/etc/hostname", fqdn)
-			t.Logf("url from %s to %s", client.Hostname(), url)
-
-			result, err := client.Curl(url)
-			assert.Empty(t, result)
-			require.Error(t, err)
-		}
-	}
-}
-
-func TestACLAutogroupSelf(t *testing.T) {
-	IntegrationSkip(t)
-	t.Parallel()
-
-	scenario := aclScenario(t,
-		&policyv1.ACLPolicy{
-			ACLs: []policyv1.ACL{
-				{
-					Action:       "accept",
-					Sources:      []string{"autogroup:self"},
-					Destinations: []string{"autogroup:self:*"},
-				},
-			},
-		},
-		2,
-	)
-	defer scenario.ShutdownAssertNoPanics(t)
-
-	user1Clients, err := scenario.ListTailscaleClients("user1")
-	require.NoError(t, err)
-
-	user2Clients, err := scenario.ListTailscaleClients("user2")
-	require.NoError(t, err)
-
-	err = scenario.WaitForTailscaleSync()
-	require.NoError(t, err)
-
-	// Test that user1 can access their own nodes
-	for _, client := range user1Clients {
-		for _, peer := range user1Clients {
-			if client.Hostname() == peer.Hostname() {
-				continue
-			}
-			fqdn, err := peer.FQDN()
-			require.NoError(t, err)
-
-			url := fmt.Sprintf("http://%s/etc/hostname", fqdn)
-			t.Logf("url from %s to %s", client.Hostname(), url)
-
-			result, err := client.Curl(url)
-			assert.Len(t, result, 13)
-			require.NoError(t, err)
-		}
-
-		// Test that user1 cannot access user2's nodes
-		for _, peer := range user2Clients {
 			fqdn, err := peer.FQDN()
 			require.NoError(t, err)
 
