@@ -3,6 +3,7 @@ package v2
 import (
 	"encoding/json"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,14 @@ import (
 	"gorm.io/gorm"
 	"tailscale.com/tailcfg"
 )
+
+// aliasWithPorts creates an AliasWithPorts structure from an alias and ports.
+func aliasWithPorts(alias Alias, ports ...tailcfg.PortRange) AliasWithPorts {
+	return AliasWithPorts{
+		Alias: alias,
+		Ports: ports,
+	}
+}
 
 func TestParsing(t *testing.T) {
 	users := types.Users{
@@ -784,6 +793,169 @@ func TestSSHJSONSerialization(t *testing.T) {
 	assert.Contains(t, string(jsonData), `"admin"`)
 	assert.NotContains(t, string(jsonData), `"sshUsers": {}`, "SSH users should not be empty")
 	assert.NotContains(t, string(jsonData), `"sshUsers": null`, "SSH users should not be null")
+}
+
+func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
+	users := types.Users{
+		{Model: gorm.Model{ID: 1}, Name: "user1"},
+		{Model: gorm.Model{ID: 2}, Name: "user2"},
+	}
+
+	nodes := types.Nodes{
+		{
+			User: users[0],
+			IPv4: ap("100.64.0.1"),
+		},
+		{
+			User: users[0],
+			IPv4: ap("100.64.0.2"),
+		},
+		{
+			User: users[1],
+			IPv4: ap("100.64.0.3"),
+		},
+		{
+			User: users[1],
+			IPv4: ap("100.64.0.4"),
+		},
+		// Tagged device for user1 (should be excluded from autogroup:self)
+		{
+			User:       users[0],
+			IPv4:       ap("100.64.0.5"),
+			ForcedTags: []string{"tag:test"},
+		},
+		// Tagged device for user2 (should be excluded from autogroup:self)
+		{
+			User:       users[1],
+			IPv4:       ap("100.64.0.6"),
+			ForcedTags: []string{"tag:test"},
+		},
+	}
+
+	// Test: Tailscale intended usage pattern (autogroup:member + autogroup:self)
+	policy2 := &Policy{
+		ACLs: []ACL{
+			{
+				Action:  "accept",
+				Sources: []Alias{agp("autogroup:member")},
+				Destinations: []AliasWithPorts{
+					aliasWithPorts(agp("autogroup:self"), tailcfg.PortRangeAny),
+				},
+			},
+		},
+	}
+
+	// Validate the policy first
+	err := policy2.validate()
+	if err != nil {
+		t.Fatalf("policy validation failed: %v", err)
+	}
+
+	// Test compilation for user1's first node
+	node1 := nodes[0].View()
+
+	rules, err := policy2.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(rules))
+	}
+
+	// Check that the rule includes:
+	// - Sources: all untagged devices (autogroup:member excludes tagged devices)
+	// - Destinations: only user1's untagged devices (autogroup:self excludes tagged devices)
+	rule := rules[0]
+
+	// Sources should include only untagged devices (autogroup:member excludes tagged devices)
+	// Note: IPSet automatically consolidates adjacent IPs into CIDR blocks for efficiency
+	// So we check that the expected IPs are covered by the generated prefixes
+	expectedSourceIPs := []string{"100.64.0.1", "100.64.0.2", "100.64.0.3", "100.64.0.4"}
+
+	for _, expectedIP := range expectedSourceIPs {
+		found := false
+
+		addr := netip.MustParseAddr(expectedIP)
+		for _, prefix := range rule.SrcIPs {
+			pref := netip.MustParsePrefix(prefix)
+			if pref.Contains(addr) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			t.Errorf("expected source IP %s to be covered by generated prefixes %v", expectedIP, rule.SrcIPs)
+		}
+	}
+
+	// Verify that tagged devices are NOT included in sources
+	excludedSourceIPs := []string{"100.64.0.5", "100.64.0.6"}
+	for _, excludedIP := range excludedSourceIPs {
+		addr := netip.MustParseAddr(excludedIP)
+		for _, prefix := range rule.SrcIPs {
+			pref := netip.MustParsePrefix(prefix)
+			if pref.Contains(addr) {
+				t.Errorf("SECURITY: source IP %s should NOT be included (tagged device) but found in prefix %s", excludedIP, prefix)
+			}
+		}
+	}
+
+	// Destinations should only include user1's untagged devices
+	expectedDestIPs := []string{"100.64.0.1", "100.64.0.2"}
+
+	actualDestIPs := make([]string, 0, len(rule.DstPorts))
+	for _, dst := range rule.DstPorts {
+		actualDestIPs = append(actualDestIPs, dst.IP)
+	}
+
+	for _, expectedIP := range expectedDestIPs {
+		found := false
+
+		for _, actualIP := range actualDestIPs {
+			if actualIP == expectedIP {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected destination IP %s to be included, got: %v", expectedIP, actualDestIPs)
+		}
+	}
+
+	// Verify that other users' devices and tagged devices are NOT in destinations
+	excludedDestIPs := []string{"100.64.0.3", "100.64.0.4", "100.64.0.5", "100.64.0.6"}
+	for _, excludedIP := range excludedDestIPs {
+		for _, actualIP := range actualDestIPs {
+			if actualIP == excludedIP {
+				t.Errorf("SECURITY: destination IP %s should NOT be included but found in destinations", excludedIP)
+			}
+		}
+	}
+}
+
+func TestAutogroupSelfInSourceIsRejected(t *testing.T) {
+	// Test that autogroup:self cannot be used in sources (per Tailscale spec)
+	policy := &Policy{
+		ACLs: []ACL{
+			{
+				Action:  "accept",
+				Sources: []Alias{agp("autogroup:self")}, // This should be rejected
+				Destinations: []AliasWithPorts{
+					aliasWithPorts(agp("autogroup:member"), tailcfg.PortRangeAny),
+				},
+			},
+		},
+	}
+
+	// This should fail validation because autogroup:self is not allowed in sources
+	err := policy.validate()
+	if err == nil {
+		t.Error("expected validation error when using autogroup:self in sources")
+	}
+	if !strings.Contains(err.Error(), "autogroup:self") {
+		t.Errorf("expected error message to mention autogroup:self, got: %v", err)
+	}
 }
 
 // Helper function to create IP addresses for testing

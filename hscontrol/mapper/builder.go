@@ -180,7 +180,11 @@ func (b *MapResponseBuilder) WithPacketFilters() *MapResponseBuilder {
 		return b
 	}
 
-	filter, _ := b.mapper.state.Filter()
+	filter, err := b.mapper.state.FilterForNode(node.View())
+	if err != nil {
+		b.addError(err)
+		return b
+	}
 
 	// CapVer 81: 2023-11-17: MapResponse.PacketFilters (incremental packet filter updates)
 	// Currently, we do not send incremental package filters, however using the
