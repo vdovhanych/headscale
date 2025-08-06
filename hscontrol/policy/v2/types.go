@@ -477,9 +477,7 @@ const (
 	AutoGroupMember   AutoGroup = "autogroup:member"
 	AutoGroupNonRoot  AutoGroup = "autogroup:nonroot"
 	AutoGroupTagged   AutoGroup = "autogroup:tagged"
-
-	// These are not yet implemented.
-	AutoGroupSelf AutoGroup = "autogroup:self"
+	AutoGroupSelf     AutoGroup = "autogroup:self"
 )
 
 var autogroups = []AutoGroup{
@@ -487,6 +485,7 @@ var autogroups = []AutoGroup{
 	AutoGroupMember,
 	AutoGroupNonRoot,
 	AutoGroupTagged,
+	AutoGroupSelf,
 }
 
 func (ag AutoGroup) Validate() error {
@@ -577,6 +576,12 @@ func (ag AutoGroup) Resolve(p *Policy, users types.Users, nodes views.Slice[type
 		}
 
 		return build.IPSet()
+
+	case AutoGroupSelf:
+		// autogroup:self represents all devices owned by the same user.
+		// This cannot be resolved in the general context and should be handled
+		// specially during policy compilation per-node for security.
+		return nil, fmt.Errorf("autogroup:self requires per-node resolution and cannot be resolved in this context")
 
 	default:
 		return nil, fmt.Errorf("unknown autogroup %q", ag)
@@ -1270,12 +1275,12 @@ type Policy struct {
 
 var (
 	// TODO(kradalby): Add these checks for tagOwners and autoApprovers.
-	autogroupForSrc       = []AutoGroup{AutoGroupMember, AutoGroupTagged}
-	autogroupForDst       = []AutoGroup{AutoGroupInternet, AutoGroupMember, AutoGroupTagged}
-	autogroupForSSHSrc    = []AutoGroup{AutoGroupMember, AutoGroupTagged}
-	autogroupForSSHDst    = []AutoGroup{AutoGroupMember, AutoGroupTagged}
+	autogroupForSrc       = []AutoGroup{AutoGroupMember, AutoGroupTagged, AutoGroupSelf}
+	autogroupForDst       = []AutoGroup{AutoGroupInternet, AutoGroupMember, AutoGroupTagged, AutoGroupSelf}
+	autogroupForSSHSrc    = []AutoGroup{AutoGroupMember, AutoGroupTagged, AutoGroupSelf}
+	autogroupForSSHDst    = []AutoGroup{AutoGroupMember, AutoGroupTagged, AutoGroupSelf}
 	autogroupForSSHUser   = []AutoGroup{AutoGroupNonRoot}
-	autogroupNotSupported = []AutoGroup{AutoGroupSelf}
+	autogroupNotSupported = []AutoGroup{}
 )
 
 func validateAutogroupSupported(ag *AutoGroup) error {
@@ -1757,3 +1762,27 @@ func unmarshalPolicy(b []byte) (*Policy, error) {
 const (
 	expectedTokenItems = 2
 )
+
+// usesAutogroupSelf checks if the policy uses autogroup:self in any ACL rules.
+func (p *Policy) usesAutogroupSelf() bool {
+	if p == nil {
+		return false
+	}
+
+	for _, acl := range p.ACLs {
+		// Check sources
+		for _, src := range acl.Sources {
+			if ag, ok := src.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+				return true
+			}
+		}
+		// Check destinations
+		for _, dest := range acl.Destinations {
+			if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+				return true
+			}
+		}
+	}
+
+	return false
+}

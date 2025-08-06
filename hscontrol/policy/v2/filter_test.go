@@ -9,6 +9,14 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+// aliasWithPorts creates an AliasWithPorts structure from an alias and ports.
+func aliasWithPorts(alias Alias, ports ...tailcfg.PortRange) AliasWithPorts {
+	return AliasWithPorts{
+		Alias: alias,
+		Ports: ports,
+	}
+}
+
 func TestParsing(t *testing.T) {
 	users := types.Users{
 		{Model: gorm.Model{ID: 1}, Name: "testuser"},
@@ -375,4 +383,115 @@ func TestParsing(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
+	users := types.Users{
+		{Model: gorm.Model{ID: 1}, Name: "user1"},
+		{Model: gorm.Model{ID: 2}, Name: "user2"},
+	}
+
+	nodes := types.Nodes{
+		{
+			User: users[0],
+			IPv4: ap("100.64.0.1"),
+		},
+		{
+			User: users[0],
+			IPv4: ap("100.64.0.2"),
+		},
+		{
+			User: users[1],
+			IPv4: ap("100.64.0.3"),
+		},
+		{
+			User: users[1],
+			IPv4: ap("100.64.0.4"),
+		},
+	}
+
+	policy := &Policy{
+		ACLs: []ACL{
+			{
+				Action:  "accept",
+				Sources: []Alias{agp("autogroup:self")},
+				Destinations: []AliasWithPorts{
+					aliasWithPorts(agp("autogroup:self"), tailcfg.PortRangeAny),
+				},
+			},
+		},
+	}
+
+	// Test compilation for user1's first node
+	node1 := nodes[0].View()
+	rules, err := policy.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(rules))
+	}
+
+	// Check that the rule includes only user1's devices (SECURITY)
+	rule := rules[0]
+	if !contains(rule.SrcIPs, "100.64.0.1/32") {
+		t.Error("expected rule to contain 100.64.0.1/32")
+	}
+	if !contains(rule.SrcIPs, "100.64.0.2/32") {
+		t.Error("expected rule to contain 100.64.0.2/32")
+	}
+	if contains(rule.SrcIPs, "100.64.0.3/32") {
+		t.Error("SECURITY: expected rule to NOT contain 100.64.0.3/32 (different user)")
+	}
+	if contains(rule.SrcIPs, "100.64.0.4/32") {
+		t.Error("SECURITY: expected rule to NOT contain 100.64.0.4/32 (different user)")
+	}
+
+	// Check destinations
+	for _, dst := range rule.DstPorts {
+		if dst.IP != "100.64.0.1" && dst.IP != "100.64.0.2" {
+			t.Errorf("SECURITY: unexpected destination IP: %s (should only be user1's devices)", dst.IP)
+		}
+	}
+
+	// Test compilation for user2's first node
+	node3 := nodes[2].View()
+	rules, err = policy.compileFilterRulesForNode(users, node3, nodes.ViewSlice())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(rules))
+	}
+
+	// Check that the rule includes only user2's devices (SECURITY)
+	rule = rules[0]
+	if !contains(rule.SrcIPs, "100.64.0.3/32") {
+		t.Error("expected rule to contain 100.64.0.3/32")
+	}
+	if !contains(rule.SrcIPs, "100.64.0.4/32") {
+		t.Error("expected rule to contain 100.64.0.4/32")
+	}
+	if contains(rule.SrcIPs, "100.64.0.1/32") {
+		t.Error("SECURITY: expected rule to NOT contain 100.64.0.1/32 (different user)")
+	}
+	if contains(rule.SrcIPs, "100.64.0.2/32") {
+		t.Error("SECURITY: expected rule to NOT contain 100.64.0.2/32 (different user)")
+	}
+
+	// Check destinations
+	for _, dst := range rule.DstPorts {
+		if dst.IP != "100.64.0.3" && dst.IP != "100.64.0.4" {
+			t.Errorf("SECURITY: unexpected destination IP: %s (should only be user2's devices)", dst.IP)
+		}
+	}
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

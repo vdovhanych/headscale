@@ -87,6 +87,205 @@ func (pol *Policy) compileFilterRules(
 	return rules, nil
 }
 
+// compileFilterRulesForNode compiles filter rules for a specific node,
+// handling autogroup:self resolution for that node's user securely.
+func (pol *Policy) compileFilterRulesForNode(
+	users types.Users,
+	node types.NodeView,
+	nodes views.Slice[types.NodeView],
+) ([]tailcfg.FilterRule, error) {
+	if pol == nil {
+		return tailcfg.FilterAllowAll, nil
+	}
+
+	var rules []tailcfg.FilterRule
+
+	for _, acl := range pol.ACLs {
+		if acl.Action != "accept" {
+			return nil, ErrInvalidAction
+		}
+
+		// Check if this ACL uses autogroup:self
+		usesAutogroupSelf := false
+		for _, src := range acl.Sources {
+			if ag, ok := src.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+				usesAutogroupSelf = true
+				break
+			}
+		}
+		for _, dest := range acl.Destinations {
+			if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+				usesAutogroupSelf = true
+				break
+			}
+		}
+
+		if usesAutogroupSelf {
+			// Handle autogroup:self per-node for security
+			rule, err := pol.compileACLWithAutogroupSelf(acl, users, node, nodes)
+			if err != nil {
+				log.Trace().Err(err).Msgf("compiling ACL with autogroup:self")
+				continue
+			}
+			if rule != nil {
+				rules = append(rules, *rule)
+			}
+		} else {
+			// Use standard compilation for ACLs without autogroup:self
+			srcIPs, err := acl.Sources.Resolve(pol, users, nodes)
+			if err != nil {
+				log.Trace().Err(err).Msgf("resolving source ips")
+				continue
+			}
+
+			if srcIPs == nil || len(srcIPs.Prefixes()) == 0 {
+				continue
+			}
+
+			protocols, _, err := parseProtocol(acl.Protocol)
+			if err != nil {
+				return nil, fmt.Errorf("parsing policy, protocol err: %w ", err)
+			}
+
+			var destPorts []tailcfg.NetPortRange
+			for _, dest := range acl.Destinations {
+				ips, err := dest.Resolve(pol, users, nodes)
+				if err != nil {
+					log.Trace().Err(err).Msgf("resolving destination ips")
+					continue
+				}
+
+				if ips == nil {
+					log.Debug().Msgf("destination resolved to nil ips: %v", dest)
+					continue
+				}
+
+				prefixes := ips.Prefixes()
+
+				for _, pref := range prefixes {
+					for _, port := range dest.Ports {
+						pr := tailcfg.NetPortRange{
+							IP:    pref.String(),
+							Ports: port,
+						}
+						destPorts = append(destPorts, pr)
+					}
+				}
+			}
+
+			if len(destPorts) == 0 {
+				continue
+			}
+
+			rules = append(rules, tailcfg.FilterRule{
+				SrcIPs:   ipSetToPrefixStringList(srcIPs),
+				DstPorts: destPorts,
+				IPProto:  protocols,
+			})
+		}
+	}
+
+	return rules, nil
+}
+
+// compileACLWithAutogroupSelf compiles a single ACL rule with autogroup:self
+// resolved for the specific node's user (SECURE - only includes same-user nodes).
+func (pol *Policy) compileACLWithAutogroupSelf(
+	acl ACL,
+	users types.Users,
+	node types.NodeView,
+	nodes views.Slice[types.NodeView],
+) (*tailcfg.FilterRule, error) {
+	// Resolve sources, replacing autogroup:self with ONLY the node's user's devices
+	var srcIPs netipx.IPSetBuilder
+	for _, src := range acl.Sources {
+		if ag, ok := src.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+			// SECURITY: Only include devices owned by the same user
+			for _, n := range nodes.All() {
+				if n.User().ID == node.User().ID {
+					n.AppendToIPSet(&srcIPs)
+				}
+			}
+		} else {
+			// Use standard resolution for non-autogroup:self sources
+			ips, err := src.Resolve(pol, users, nodes)
+			if err != nil {
+				log.Trace().Err(err).Msgf("resolving source ips")
+				continue
+			}
+			srcIPs.AddSet(ips)
+		}
+	}
+
+	srcSet, err := srcIPs.IPSet()
+	if err != nil {
+		return nil, err
+	}
+
+	if srcSet == nil || len(srcSet.Prefixes()) == 0 {
+		return nil, nil
+	}
+
+	protocols, _, err := parseProtocol(acl.Protocol)
+	if err != nil {
+		return nil, fmt.Errorf("parsing policy, protocol err: %w ", err)
+	}
+
+	var destPorts []tailcfg.NetPortRange
+	for _, dest := range acl.Destinations {
+		if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+			// SECURITY: Only include devices owned by the same user
+			for _, n := range nodes.All() {
+				if n.User().ID == node.User().ID {
+					for _, port := range dest.Ports {
+						for _, ip := range n.IPs() {
+							pr := tailcfg.NetPortRange{
+								IP:    ip.String(),
+								Ports: port,
+							}
+							destPorts = append(destPorts, pr)
+						}
+					}
+				}
+			}
+		} else {
+			// Use standard resolution for non-autogroup:self destinations
+			ips, err := dest.Resolve(pol, users, nodes)
+			if err != nil {
+				log.Trace().Err(err).Msgf("resolving destination ips")
+				continue
+			}
+
+			if ips == nil {
+				log.Debug().Msgf("destination resolved to nil ips: %v", dest)
+				continue
+			}
+
+			prefixes := ips.Prefixes()
+
+			for _, pref := range prefixes {
+				for _, port := range dest.Ports {
+					pr := tailcfg.NetPortRange{
+						IP:    pref.String(),
+						Ports: port,
+					}
+					destPorts = append(destPorts, pr)
+				}
+			}
+		}
+	}
+
+	if len(destPorts) == 0 {
+		return nil, nil
+	}
+
+	return &tailcfg.FilterRule{
+		SrcIPs:   ipSetToPrefixStringList(srcSet),
+		DstPorts: destPorts,
+		IPProto:  protocols,
+	}, nil
+}
+
 func sshAction(accept bool, duration time.Duration) tailcfg.SSHAction {
 	return tailcfg.SSHAction{
 		Reject:                   !accept,
