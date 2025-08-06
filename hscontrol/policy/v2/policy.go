@@ -37,6 +37,10 @@ type PolicyManager struct {
 
 	// Lazy map of SSH policies
 	sshPolicyMap map[types.NodeID]*tailcfg.SSHPolicy
+
+	// Lazy map of per-node filter rules (when autogroup:self is used)
+	filterRulesMap    map[types.NodeID][]tailcfg.FilterRule
+	usesAutogroupSelf bool
 }
 
 // NewPolicyManager creates a new PolicyManager from a policy file and a list of users and nodes.
@@ -49,10 +53,12 @@ func NewPolicyManager(b []byte, users []types.User, nodes views.Slice[types.Node
 	}
 
 	pm := PolicyManager{
-		pol:          policy,
-		users:        users,
-		nodes:        nodes,
-		sshPolicyMap: make(map[types.NodeID]*tailcfg.SSHPolicy, nodes.Len()),
+		pol:               policy,
+		users:             users,
+		nodes:             nodes,
+		sshPolicyMap:      make(map[types.NodeID]*tailcfg.SSHPolicy, nodes.Len()),
+		filterRulesMap:    make(map[types.NodeID][]tailcfg.FilterRule, nodes.Len()),
+		usesAutogroupSelf: policy.usesAutogroupSelf(),
 	}
 
 	_, err = pm.updateLocked()
@@ -71,8 +77,17 @@ func (pm *PolicyManager) updateLocked() (bool, error) {
 	// policies for nodes that have changed. Particularly if the only difference is
 	// that nodes has been added or removed.
 	clear(pm.sshPolicyMap)
+	clear(pm.filterRulesMap)
 
-	filter, err := pm.pol.compileFilterRules(pm.users, pm.nodes)
+	// Check if policy uses autogroup:self
+	pm.usesAutogroupSelf = pm.pol.usesAutogroupSelf()
+
+	var filter []tailcfg.FilterRule
+
+	var err error
+
+	// Standard compilation for all policies
+	filter, err = pm.pol.compileFilterRules(pm.users, pm.nodes)
 	if err != nil {
 		return false, fmt.Errorf("compiling filter rules: %w", err)
 	}
@@ -168,6 +183,35 @@ func (pm *PolicyManager) Filter() ([]tailcfg.FilterRule, []matcher.Match) {
 	return pm.filter, pm.matchers
 }
 
+// FilterForNode returns the filter rules for a specific node.
+// If the policy uses autogroup:self, this returns node-specific rules for security.
+// Otherwise, it returns the global filter rules for efficiency.
+func (pm *PolicyManager) FilterForNode(node types.NodeView) ([]tailcfg.FilterRule, error) {
+	if pm == nil {
+		return nil, nil
+	}
+
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	if !pm.usesAutogroupSelf {
+		return pm.filter, nil
+	}
+
+	if rules, ok := pm.filterRulesMap[node.ID()]; ok {
+		return rules, nil
+	}
+
+	rules, err := pm.pol.compileFilterRulesForNode(pm.users, node, pm.nodes)
+	if err != nil {
+		return nil, fmt.Errorf("compiling filter rules for node: %w", err)
+	}
+
+	pm.filterRulesMap[node.ID()] = rules
+
+	return rules, nil
+}
+
 // SetUsers updates the users in the policy manager and updates the filter rules.
 func (pm *PolicyManager) SetUsers(users []types.User) (bool, error) {
 	if pm == nil {
@@ -190,6 +234,8 @@ func (pm *PolicyManager) SetNodes(nodes views.Slice[types.NodeView]) (bool, erro
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.nodes = nodes
+
+	clear(pm.filterRulesMap)
 
 	return pm.updateLocked()
 }

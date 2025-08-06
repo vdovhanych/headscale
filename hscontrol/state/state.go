@@ -209,7 +209,6 @@ func (s *State) CreateUser(user types.User) (*types.User, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-
 	if err := s.db.DB.Save(&user).Error; err != nil {
 		return nil, false, fmt.Errorf("creating user: %w", err)
 	}
@@ -618,6 +617,11 @@ func (s *State) SSHPolicy(node types.NodeView) (*tailcfg.SSHPolicy, error) {
 // Filter returns the current network filter rules and matches.
 func (s *State) Filter() ([]tailcfg.FilterRule, []matcher.Match) {
 	return s.polMan.Filter()
+}
+
+// FilterForNode returns filter rules for a specific node, handling autogroup:self per-node.
+func (s *State) FilterForNode(node types.NodeView) ([]tailcfg.FilterRule, error) {
+	return s.polMan.FilterForNode(node)
 }
 
 // NodeCanHaveTag checks if a node is allowed to have a specific tag.
