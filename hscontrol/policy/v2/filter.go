@@ -82,6 +82,173 @@ func (pol *Policy) compileFilterRules(
 	return rules, nil
 }
 
+// compileFilterRulesForNode compiles filter rules for a specific node.
+// This follows the same pattern as compileSSHPolicy which always compiles per-node.
+func (pol *Policy) compileFilterRulesForNode(
+	users types.Users,
+	node types.NodeView,
+	nodes views.Slice[types.NodeView],
+) ([]tailcfg.FilterRule, error) {
+	if pol == nil {
+		return tailcfg.FilterAllowAll, nil
+	}
+
+	var rules []tailcfg.FilterRule
+
+	for _, acl := range pol.ACLs {
+		if acl.Action != ActionAccept {
+			return nil, ErrInvalidAction
+		}
+
+		// Always compile per-node to handle autogroup:self securely
+		rule, err := pol.compileACLWithAutogroupSelf(acl, users, node, nodes)
+		if err != nil {
+			log.Trace().Err(err).Msgf("compiling ACL")
+			continue
+		}
+
+		if rule != nil {
+			rules = append(rules, *rule)
+		}
+	}
+
+	return rules, nil
+}
+
+// compileACLWithAutogroupSelf compiles a single ACL rule, handling
+// autogroup:self per-node while supporting all other alias types normally.
+func (pol *Policy) compileACLWithAutogroupSelf(
+	acl ACL,
+	users types.Users,
+	node types.NodeView,
+	nodes views.Slice[types.NodeView],
+) (*tailcfg.FilterRule, error) {
+	// Check if any destination uses autogroup:self
+	hasAutogroupSelfInDst := false
+
+	for _, dest := range acl.Destinations {
+		if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+			hasAutogroupSelfInDst = true
+			break
+		}
+	}
+
+	var srcIPs netipx.IPSetBuilder
+
+	// Resolve sources
+	// ALL sources (autogroup:member, group:xxx, user@) are filtered
+	// to only include devices from the same user as the target node.
+	for _, src := range acl.Sources {
+		// autogroup:self is not allowed in sources (validated earlier)
+		// but we add a defensive check here
+		if ag, ok := src.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+			return nil, fmt.Errorf("autogroup:self cannot be used in sources")
+		}
+
+		ips, err := src.Resolve(pol, users, nodes)
+		if err != nil {
+			log.Trace().Err(err).Msgf("resolving source ips")
+			continue
+		}
+
+		if ips != nil {
+			// If autogroup:self is in destination, filter the resolved sources
+			// to only include devices from the target node's user
+			if hasAutogroupSelfInDst {
+				// Build IPSet of only the target user's devices
+				var userIPs netipx.IPSetBuilder
+
+				for _, n := range nodes.All() {
+					if n.User().ID == node.User().ID && !n.IsTagged() {
+						n.AppendToIPSet(&userIPs)
+					}
+				}
+
+				userIPSet, err := userIPs.IPSet()
+				if err != nil {
+					return nil, err
+				}
+
+				// Intersect the resolved source IPs with the target user's devices
+				// netipx.IPSet doesn't have Intersect, so we manually filter
+				for addr := range util.IPSetAddrIter(ips) {
+					if userIPSet.Contains(addr) {
+						srcIPs.Add(addr)
+					}
+				}
+			} else {
+				// No autogroup:self in destination, use all resolved sources
+				srcIPs.AddSet(ips)
+			}
+		}
+	}
+
+	srcSet, err := srcIPs.IPSet()
+	if err != nil {
+		return nil, err
+	}
+
+	if srcSet == nil || len(srcSet.Prefixes()) == 0 {
+		// No sources resolved, skip this rule
+		return nil, nil //nolint:nilnil
+	}
+
+	protocols, _ := acl.Protocol.parseProtocol()
+
+	var destPorts []tailcfg.NetPortRange
+
+	for _, dest := range acl.Destinations {
+		if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+			for _, n := range nodes.All() {
+				if n.User().ID == node.User().ID && !n.IsTagged() {
+					for _, port := range dest.Ports {
+						for _, ip := range n.IPs() {
+							pr := tailcfg.NetPortRange{
+								IP:    ip.String(),
+								Ports: port,
+							}
+							destPorts = append(destPorts, pr)
+						}
+					}
+				}
+			}
+		} else {
+			ips, err := dest.Resolve(pol, users, nodes)
+			if err != nil {
+				log.Trace().Err(err).Msgf("resolving destination ips")
+				continue
+			}
+
+			if ips == nil {
+				log.Debug().Msgf("destination resolved to nil ips: %v", dest)
+				continue
+			}
+
+			prefixes := ips.Prefixes()
+
+			for _, pref := range prefixes {
+				for _, port := range dest.Ports {
+					pr := tailcfg.NetPortRange{
+						IP:    pref.String(),
+						Ports: port,
+					}
+					destPorts = append(destPorts, pr)
+				}
+			}
+		}
+	}
+
+	if len(destPorts) == 0 {
+		return &tailcfg.FilterRule{}, nil
+	}
+
+	return &tailcfg.FilterRule{
+		SrcIPs:   ipSetToPrefixStringList(srcSet),
+		DstPorts: destPorts,
+		IPProto:  protocols,
+	}, nil
+}
+
 func sshAction(accept bool, duration time.Duration) tailcfg.SSHAction {
 	return tailcfg.SSHAction{
 		Reject:                    !accept,
