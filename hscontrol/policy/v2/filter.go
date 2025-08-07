@@ -87,8 +87,8 @@ func (pol *Policy) compileFilterRules(
 	return rules, nil
 }
 
-// compileFilterRulesForNode compiles filter rules for a specific node,
-// handling autogroup:self resolution for that node's user securely.
+// compileFilterRulesForNode compiles filter rules for a specific node.
+// This follows the same pattern as compileSSHPolicy - always compiles per-node.
 func (pol *Policy) compileFilterRulesForNode(
 	users types.Users,
 	node types.NodeView,
@@ -105,104 +105,36 @@ func (pol *Policy) compileFilterRulesForNode(
 			return nil, ErrInvalidAction
 		}
 
-		// Check if this ACL uses autogroup:self
-		usesAutogroupSelf := false
-		for _, src := range acl.Sources {
-			if ag, ok := src.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
-				usesAutogroupSelf = true
-				break
-			}
+		// Always compile per-node to handle autogroup:self securely
+		rule, err := pol.compileACLWithAutogroupSelf(acl, users, node, nodes)
+		if err != nil {
+			log.Trace().Err(err).Msgf("compiling ACL")
+			continue
 		}
-		for _, dest := range acl.Destinations {
-			if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
-				usesAutogroupSelf = true
-				break
-			}
-		}
-
-		if usesAutogroupSelf {
-			// Handle autogroup:self per-node for security
-			rule, err := pol.compileACLWithAutogroupSelf(acl, users, node, nodes)
-			if err != nil {
-				log.Trace().Err(err).Msgf("compiling ACL with autogroup:self")
-				continue
-			}
-			if rule != nil {
-				rules = append(rules, *rule)
-			}
-		} else {
-			// Use standard compilation for ACLs without autogroup:self
-			srcIPs, err := acl.Sources.Resolve(pol, users, nodes)
-			if err != nil {
-				log.Trace().Err(err).Msgf("resolving source ips")
-				continue
-			}
-
-			if srcIPs == nil || len(srcIPs.Prefixes()) == 0 {
-				continue
-			}
-
-			protocols, _, err := parseProtocol(acl.Protocol)
-			if err != nil {
-				return nil, fmt.Errorf("parsing policy, protocol err: %w ", err)
-			}
-
-			var destPorts []tailcfg.NetPortRange
-			for _, dest := range acl.Destinations {
-				ips, err := dest.Resolve(pol, users, nodes)
-				if err != nil {
-					log.Trace().Err(err).Msgf("resolving destination ips")
-					continue
-				}
-
-				if ips == nil {
-					log.Debug().Msgf("destination resolved to nil ips: %v", dest)
-					continue
-				}
-
-				prefixes := ips.Prefixes()
-
-				for _, pref := range prefixes {
-					for _, port := range dest.Ports {
-						pr := tailcfg.NetPortRange{
-							IP:    pref.String(),
-							Ports: port,
-						}
-						destPorts = append(destPorts, pr)
-					}
-				}
-			}
-
-			if len(destPorts) == 0 {
-				continue
-			}
-
-			rules = append(rules, tailcfg.FilterRule{
-				SrcIPs:   ipSetToPrefixStringList(srcIPs),
-				DstPorts: destPorts,
-				IPProto:  protocols,
-			})
+		if rule != nil {
+			rules = append(rules, *rule)
 		}
 	}
 
 	return rules, nil
 }
 
-// compileACLWithAutogroupSelf compiles a single ACL rule with autogroup:self
-// resolved for the specific node's user (SECURE - only includes same-user nodes).
+// compileACLWithAutogroupSelf compiles a single ACL rule, handling autogroup:self
+// per-node while supporting all other alias types normally.
 func (pol *Policy) compileACLWithAutogroupSelf(
 	acl ACL,
 	users types.Users,
 	node types.NodeView,
 	nodes views.Slice[types.NodeView],
 ) (*tailcfg.FilterRule, error) {
-	// Resolve sources, replacing autogroup:self with ONLY the node's user's devices
+	// Resolve sources, handling autogroup:self per-node
 	var srcIPs netipx.IPSetBuilder
 	for _, src := range acl.Sources {
 		if ag, ok := src.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
-			// SECURITY: Only include devices owned by the same user
+			// autogroup:self: Only include devices where the same user is authenticated
+			// AND the device is not tagged (per Tailscale spec)
 			for _, n := range nodes.All() {
-				if n.User().ID == node.User().ID {
+				if n.User().ID == node.User().ID && !n.IsTagged() {
 					n.AppendToIPSet(&srcIPs)
 				}
 			}
@@ -213,7 +145,9 @@ func (pol *Policy) compileACLWithAutogroupSelf(
 				log.Trace().Err(err).Msgf("resolving source ips")
 				continue
 			}
-			srcIPs.AddSet(ips)
+			if ips != nil {
+				srcIPs.AddSet(ips)
+			}
 		}
 	}
 
@@ -234,9 +168,10 @@ func (pol *Policy) compileACLWithAutogroupSelf(
 	var destPorts []tailcfg.NetPortRange
 	for _, dest := range acl.Destinations {
 		if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
-			// SECURITY: Only include devices owned by the same user
+			// autogroup:self: Only include devices where the same user is authenticated
+			// AND the device is not tagged (per Tailscale spec)
 			for _, n := range nodes.All() {
-				if n.User().ID == node.User().ID {
+				if n.User().ID == node.User().ID && !n.IsTagged() {
 					for _, port := range dest.Ports {
 						for _, ip := range n.IPs() {
 							pr := tailcfg.NetPortRange{

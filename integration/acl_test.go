@@ -1333,7 +1333,7 @@ func TestACLAutogroupSelf(t *testing.T) {
 			ACLs: []policyv2.ACL{
 				{
 					Action:  "accept",
-					Sources: []policyv2.Alias{ptr.To(policyv2.AutoGroupSelf)},
+					Sources: []policyv2.Alias{ptr.To(policyv2.AutoGroupMember)},
 					Destinations: []policyv2.AliasWithPorts{
 						aliasWithPorts(ptr.To(policyv2.AutoGroupSelf), tailcfg.PortRangeAny),
 					},

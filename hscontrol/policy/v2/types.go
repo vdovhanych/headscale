@@ -1275,9 +1275,9 @@ type Policy struct {
 
 var (
 	// TODO(kradalby): Add these checks for tagOwners and autoApprovers.
-	autogroupForSrc       = []AutoGroup{AutoGroupMember, AutoGroupTagged, AutoGroupSelf}
+	autogroupForSrc       = []AutoGroup{AutoGroupMember, AutoGroupTagged}
 	autogroupForDst       = []AutoGroup{AutoGroupInternet, AutoGroupMember, AutoGroupTagged, AutoGroupSelf}
-	autogroupForSSHSrc    = []AutoGroup{AutoGroupMember, AutoGroupTagged, AutoGroupSelf}
+	autogroupForSSHSrc    = []AutoGroup{AutoGroupMember, AutoGroupTagged}
 	autogroupForSSHDst    = []AutoGroup{AutoGroupMember, AutoGroupTagged, AutoGroupSelf}
 	autogroupForSSHUser   = []AutoGroup{AutoGroupNonRoot}
 	autogroupNotSupported = []AutoGroup{}
@@ -1762,27 +1762,3 @@ func unmarshalPolicy(b []byte) (*Policy, error) {
 const (
 	expectedTokenItems = 2
 )
-
-// usesAutogroupSelf checks if the policy uses autogroup:self in any ACL rules.
-func (p *Policy) usesAutogroupSelf() bool {
-	if p == nil {
-		return false
-	}
-
-	for _, acl := range p.ACLs {
-		// Check sources
-		for _, src := range acl.Sources {
-			if ag, ok := src.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
-				return true
-			}
-		}
-		// Check destinations
-		for _, dest := range acl.Destinations {
-			if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
-				return true
-			}
-		}
-	}
-
-	return false
-}

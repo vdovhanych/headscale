@@ -1,6 +1,7 @@
 package v2
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -408,13 +409,26 @@ func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
 			User: users[1],
 			IPv4: ap("100.64.0.4"),
 		},
+		// Tagged device for user1 (should be excluded from autogroup:self)
+		{
+			User:       users[0],
+			IPv4:       ap("100.64.0.5"),
+			ForcedTags: []string{"tag:test"},
+		},
+		// Tagged device for user2 (should be excluded from autogroup:self)
+		{
+			User:       users[1],
+			IPv4:       ap("100.64.0.6"),
+			ForcedTags: []string{"tag:test"},
+		},
 	}
 
-	policy := &Policy{
+	// Test: Tailscale intended usage pattern (autogroup:member + autogroup:self)
+	policy2 := &Policy{
 		ACLs: []ACL{
 			{
 				Action:  "accept",
-				Sources: []Alias{agp("autogroup:self")},
+				Sources: []Alias{agp("autogroup:member")},
 				Destinations: []AliasWithPorts{
 					aliasWithPorts(agp("autogroup:self"), tailcfg.PortRangeAny),
 				},
@@ -422,9 +436,14 @@ func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
 		},
 	}
 
+	// Validate the policy first
+	if err := policy2.validate(); err != nil {
+		t.Fatalf("policy validation failed: %v", err)
+	}
+
 	// Test compilation for user1's first node
 	node1 := nodes[0].View()
-	rules, err := policy.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
+	rules, err := policy2.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -432,58 +451,64 @@ func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
 		t.Fatalf("expected 1 rule, got %d", len(rules))
 	}
 
-	// Check that the rule includes only user1's devices (SECURITY)
+	// Check that the rule includes:
+	// - Sources: all untagged devices (autogroup:member excludes tagged devices)
+	// - Destinations: only user1's untagged devices (autogroup:self excludes tagged devices)
 	rule := rules[0]
+
+	// Debug: print what we actually got
+	t.Logf("Generated rule sources: %v", rule.SrcIPs)
+	t.Logf("Generated rule destinations: %v", rule.DstPorts)
+
+	// Sources should include only untagged devices (autogroup:member excludes tagged devices)
 	if !contains(rule.SrcIPs, "100.64.0.1/32") {
-		t.Error("expected rule to contain 100.64.0.1/32")
+		t.Error("expected rule to contain 100.64.0.1/32 in sources")
 	}
 	if !contains(rule.SrcIPs, "100.64.0.2/32") {
-		t.Error("expected rule to contain 100.64.0.2/32")
+		t.Error("expected rule to contain 100.64.0.2/32 in sources")
 	}
-	if contains(rule.SrcIPs, "100.64.0.3/32") {
-		t.Error("SECURITY: expected rule to NOT contain 100.64.0.3/32 (different user)")
-	}
-	if contains(rule.SrcIPs, "100.64.0.4/32") {
-		t.Error("SECURITY: expected rule to NOT contain 100.64.0.4/32 (different user)")
-	}
-
-	// Check destinations
-	for _, dst := range rule.DstPorts {
-		if dst.IP != "100.64.0.1" && dst.IP != "100.64.0.2" {
-			t.Errorf("SECURITY: unexpected destination IP: %s (should only be user1's devices)", dst.IP)
-		}
-	}
-
-	// Test compilation for user2's first node
-	node3 := nodes[2].View()
-	rules, err = policy.compileFilterRulesForNode(users, node3, nodes.ViewSlice())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(rules) != 1 {
-		t.Fatalf("expected 1 rule, got %d", len(rules))
-	}
-
-	// Check that the rule includes only user2's devices (SECURITY)
-	rule = rules[0]
 	if !contains(rule.SrcIPs, "100.64.0.3/32") {
-		t.Error("expected rule to contain 100.64.0.3/32")
+		t.Error("expected rule to contain 100.64.0.3/32 in sources")
 	}
 	if !contains(rule.SrcIPs, "100.64.0.4/32") {
-		t.Error("expected rule to contain 100.64.0.4/32")
+		t.Error("expected rule to contain 100.64.0.4/32 in sources")
 	}
-	if contains(rule.SrcIPs, "100.64.0.1/32") {
-		t.Error("SECURITY: expected rule to NOT contain 100.64.0.1/32 (different user)")
+	if contains(rule.SrcIPs, "100.64.0.5/32") {
+		t.Error("expected rule to NOT contain 100.64.0.5/32 in sources (tagged device)")
 	}
-	if contains(rule.SrcIPs, "100.64.0.2/32") {
-		t.Error("SECURITY: expected rule to NOT contain 100.64.0.2/32 (different user)")
+	if contains(rule.SrcIPs, "100.64.0.6/32") {
+		t.Error("expected rule to NOT contain 100.64.0.6/32 in sources (tagged device)")
 	}
 
-	// Check destinations
+	// Destinations should only include user1's untagged devices
 	for _, dst := range rule.DstPorts {
-		if dst.IP != "100.64.0.3" && dst.IP != "100.64.0.4" {
-			t.Errorf("SECURITY: unexpected destination IP: %s (should only be user2's devices)", dst.IP)
+		if dst.IP != "100.64.0.1" && dst.IP != "100.64.0.2" {
+			t.Errorf("unexpected destination IP: %s (should only be user1's untagged devices)", dst.IP)
 		}
+	}
+}
+
+func TestAutogroupSelfInSourceIsRejected(t *testing.T) {
+	// Test that autogroup:self cannot be used in sources (per Tailscale spec)
+	policy := &Policy{
+		ACLs: []ACL{
+			{
+				Action:  "accept",
+				Sources: []Alias{agp("autogroup:self")}, // This should be rejected
+				Destinations: []AliasWithPorts{
+					aliasWithPorts(agp("autogroup:member"), tailcfg.PortRangeAny),
+				},
+			},
+		},
+	}
+
+	// This should fail validation because autogroup:self is not allowed in sources
+	err := policy.validate()
+	if err == nil {
+		t.Error("expected validation error when using autogroup:self in sources")
+	}
+	if !strings.Contains(err.Error(), "autogroup:self") {
+		t.Errorf("expected error message to mention autogroup:self, got: %v", err)
 	}
 }
 
