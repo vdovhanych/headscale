@@ -626,6 +626,25 @@ func TestUnmarshalPolicy(t *testing.T) {
 			wantErr: `"autogroup:internet" used in SSH source, it can only be used in ACL destinations`,
 		},
 		{
+			name: "autogroup:self-in-ssh-src-not-allowed",
+			input: `
+{
+  "ssh": [
+    {
+      "action": "accept",
+      "src": [
+        "autogroup:self"
+      ],
+      "dst": [
+        "tag:test"
+      ]
+    }
+  ]
+}
+`,
+			wantErr: `autogroup "autogroup:self" is not supported for SSH sources`,
+		},
+		{
 			name: "autogroup:internet-in-ssh-dst-not-allowed",
 			input: `
 {

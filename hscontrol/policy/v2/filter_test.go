@@ -627,3 +627,151 @@ func TestPolicyManagerFilterForNode(t *testing.T) {
 		t.Errorf("cached rules differ from original (-want +got):\n%s", diff)
 	}
 }
+
+func TestAutogroupSelfTailscaleSemantics(t *testing.T) {
+	// Test based on Tailscale documentation:
+	// "autogroup:self: Use to allow access for any user that is authenticated as the same user as the source. Does not apply to tags."
+	// This test validates the intended Tailscale usage pattern mentioned in the problem statement.
+	
+	user1 := types.User{Model: gorm.Model{ID: 1}, Name: "alice"}
+	user2 := types.User{Model: gorm.Model{ID: 2}, Name: "bob"}
+	users := []types.User{user1, user2}
+
+	// Alice's devices
+	aliceDevice1 := &types.Node{
+		ID:       1,
+		IPv4:     ap("100.64.0.1"),
+		User:     user1,
+		Hostinfo: &tailcfg.Hostinfo{},
+	}
+	
+	aliceDevice2 := &types.Node{
+		ID:       2,
+		IPv4:     ap("100.64.0.2"),
+		User:     user1,
+		Hostinfo: &tailcfg.Hostinfo{},
+	}
+	
+	// Bob's device
+	bobDevice := &types.Node{
+		ID:       3,
+		IPv4:     ap("100.64.0.3"),
+		User:     user2,
+		Hostinfo: &tailcfg.Hostinfo{},
+	}
+	
+	// Tagged device (should be excluded from autogroup:self)
+	taggedServer := &types.Node{
+		ID:       4,
+		IPv4:     ap("100.64.0.4"),
+		User:     user1,
+		Hostinfo: &tailcfg.Hostinfo{},
+		ForcedTags: []string{"tag:server"},
+	}
+
+	allNodes := types.Nodes{aliceDevice1, aliceDevice2, bobDevice, taggedServer}.ViewSlice()
+
+	// Policy follows Tailscale pattern: sources like `autogroup:member` with destination `autogroup:self`
+	policy := `{
+		"acls": [
+			{
+				"action": "accept",
+				"src": ["autogroup:member"],
+				"dst": ["autogroup:self:22,80,443"]
+			}
+		]
+	}`
+
+	pm, err := NewPolicyManager([]byte(policy), users, allNodes)
+	if err != nil {
+		t.Fatalf("failed to create policy manager: %v", err)
+	}
+
+	// Test Alice's device1 perspective
+	aliceRules, err := pm.FilterForNode(aliceDevice1.View())
+	if err != nil {
+		t.Fatalf("failed to get filter for Alice's device: %v", err)
+	}
+
+	// Alice should be able to access her own devices (device1 and device2), but not tagged devices
+	if len(aliceRules) != 1 {
+		t.Fatalf("expected 1 rule for Alice, got %d", len(aliceRules))
+	}
+
+	aliceRule := aliceRules[0]
+	
+	// Sources should only include Alice's untagged devices
+	expectedAliceSrcIPs := []string{"100.64.0.1/32", "100.64.0.2/32"}
+	if diff := cmp.Diff(expectedAliceSrcIPs, aliceRule.SrcIPs); diff != "" {
+		t.Errorf("Alice's sources incorrect (-want +got):\n%s", diff)
+	}
+
+	// Destinations should only include Alice's untagged devices with the specified ports
+	expectedPorts := []tailcfg.PortRange{
+		{First: 22, Last: 22},
+		{First: 80, Last: 80},
+		{First: 443, Last: 443},
+	}
+	
+	if len(aliceRule.DstPorts) != 6 { // 2 devices * 3 ports
+		t.Fatalf("expected 6 destination ports, got %d", len(aliceRule.DstPorts))
+	}
+
+	// Verify all destinations are Alice's devices with correct ports
+	for _, dstPort := range aliceRule.DstPorts {
+		if dstPort.IP != "100.64.0.1/32" && dstPort.IP != "100.64.0.2/32" {
+			t.Errorf("unexpected destination IP: %s", dstPort.IP)
+		}
+		if !contains(expectedPorts, dstPort.Ports) {
+			t.Errorf("unexpected port range: %v", dstPort.Ports)
+		}
+	}
+
+	// Test Bob's device perspective  
+	bobRules, err := pm.FilterForNode(bobDevice.View())
+	if err != nil {
+		t.Fatalf("failed to get filter for Bob's device: %v", err)
+	}
+
+	if len(bobRules) != 1 {
+		t.Fatalf("expected 1 rule for Bob, got %d", len(bobRules))
+	}
+
+	bobRule := bobRules[0]
+	
+	// Bob should only see his own device in sources and destinations
+	expectedBobSrcIPs := []string{"100.64.0.3/32"}
+	if diff := cmp.Diff(expectedBobSrcIPs, bobRule.SrcIPs); diff != "" {
+		t.Errorf("Bob's sources incorrect (-want +got):\n%s", diff)
+	}
+
+	// Bob should only have destinations for his own device
+	if len(bobRule.DstPorts) != 3 { // 1 device * 3 ports
+		t.Fatalf("expected 3 destination ports for Bob, got %d", len(bobRule.DstPorts))
+	}
+
+	for _, dstPort := range bobRule.DstPorts {
+		if dstPort.IP != "100.64.0.3/32" {
+			t.Errorf("unexpected destination IP for Bob: %s", dstPort.IP)
+		}
+	}
+
+	// Test tagged device - should get no autogroup:self rules
+	taggedRules, err := pm.FilterForNode(taggedServer.View())
+	if err != nil {
+		t.Fatalf("failed to get filter for tagged device: %v", err)
+	}
+
+	if len(taggedRules) != 0 {
+		t.Errorf("tagged device should not get autogroup:self rules, got %d rules", len(taggedRules))
+	}
+}
+
+func contains(slice []tailcfg.PortRange, item tailcfg.PortRange) bool {
+	for _, s := range slice {
+		if s.First == item.First && s.Last == item.Last {
+			return true
+		}
+	}
+	return false
+}
