@@ -681,3 +681,130 @@ func TestAutogroupSelfInSourceIsRejected(t *testing.T) {
 		t.Errorf("expected error message to mention autogroup:self, got: %v", err)
 	}
 }
+
+func TestAutogroupSelfOnlyProcessedWhenInDestinations(t *testing.T) {
+	users := types.Users{
+		{Model: gorm.Model{ID: 1}, Name: "user1"},
+		{Model: gorm.Model{ID: 2}, Name: "user2"},
+	}
+
+	nodes := types.Nodes{
+		{
+			User: users[0],
+			IPv4: ap("100.64.0.1"),
+		},
+		{
+			User: users[1],
+			IPv4: ap("100.64.0.2"),
+		},
+	}
+
+	t.Run("ACL without autogroup:self uses standard compilation", func(t *testing.T) {
+		policy := &Policy{
+			ACLs: []ACL{
+				{
+					Action:  "accept",
+					Sources: []Alias{agp("autogroup:member")},
+					Destinations: []AliasWithPorts{
+						aliasWithPorts(agp("autogroup:member"), tailcfg.PortRangeAny),
+					},
+				},
+			},
+		}
+
+		err := policy.validate()
+		if err != nil {
+			t.Fatalf("policy validation failed: %v", err)
+		}
+
+		node1 := nodes[0].View()
+		rules, err := policy.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Should include devices from all users since no autogroup:self filtering
+		expectedCount := 2 // Both user1 and user2 devices
+		
+		// Count how many unique destination IPs we have
+		destIPSet := make(map[string]bool)
+		for _, rule := range rules {
+			for _, dst := range rule.DstPorts {
+				destIPSet[dst.IP] = true
+			}
+		}
+
+		if len(destIPSet) < expectedCount {
+			t.Errorf("expected at least %d destination IPs without autogroup:self filtering, got %d: %v", 
+				expectedCount, len(destIPSet), destIPSet)
+		}
+	})
+
+	t.Run("ACL with autogroup:self uses per-node compilation", func(t *testing.T) {
+		policy := &Policy{
+			ACLs: []ACL{
+				{
+					Action:  "accept",
+					Sources: []Alias{agp("autogroup:member")},
+					Destinations: []AliasWithPorts{
+						aliasWithPorts(agp("autogroup:self"), tailcfg.PortRangeAny),
+					},
+				},
+			},
+		}
+
+		err := policy.validate()
+		if err != nil {
+			t.Fatalf("policy validation failed: %v", err)
+		}
+
+		node1 := nodes[0].View()
+		rules, err := policy.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Should only include devices from the same user due to autogroup:self filtering
+		expectedIP := "100.64.0.1" // Only user1's device
+		
+		found := false
+		for _, rule := range rules {
+			for _, dst := range rule.DstPorts {
+				if dst.IP == expectedIP {
+					found = true
+				}
+				// Should NOT include user2's device
+				if dst.IP == "100.64.0.2" {
+					t.Errorf("autogroup:self should not include devices from other users, but found %s", dst.IP)
+				}
+			}
+		}
+
+		if !found {
+			t.Errorf("expected to find user1's device %s in destinations when using autogroup:self", expectedIP)
+		}
+	})
+}
+
+func TestAutogroupSelfInSSHSourceIsRejected(t *testing.T) {
+	// Test that autogroup:self cannot be used in SSH sources  
+	policy := &Policy{
+		SSHs: []SSH{
+			{
+				Action:       "accept",
+				Sources:      SSHSrcAliases{agp("autogroup:self")}, // This should be rejected
+				Destinations: SSHDstAliases{agp("autogroup:member")},
+				Users:        []SSHUser{},
+			},
+		},
+	}
+
+	// This should fail validation because autogroup:self is not allowed in SSH sources
+	err := policy.validate()
+	if err == nil {
+		t.Error("expected validation error when using autogroup:self in SSH sources")
+	}
+	if !strings.Contains(err.Error(), "autogroup:self") {
+		t.Errorf("expected error message to mention autogroup:self, got: %v", err)
+	}
+}

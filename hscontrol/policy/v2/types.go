@@ -1338,6 +1338,10 @@ func validateAutogroupForSSHSrc(src *AutoGroup) error {
 		return errors.New(`"autogroup:internet" used in SSH source, it can only be used in ACL destinations`)
 	}
 
+	if src.Is(AutoGroupSelf) {
+		return errors.New(`"autogroup:self" used in SSH source, it can only be used in SSH destinations`)
+	}
+
 	if !slices.Contains(autogroupForSSHSrc, *src) {
 		return fmt.Errorf("autogroup %q is not supported for SSH sources, can be %v", *src, autogroupForSSHSrc)
 	}

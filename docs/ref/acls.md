@@ -187,3 +187,65 @@ Here are the ACL's to implement the same permissions as above:
   ]
 }
 ```
+
+## Autogroups
+
+Headscale supports several [Tailscale autogroups](https://tailscale.com/kb/1396/targets#autogroups) that provide convenient ways to refer to sets of devices in ACL rules:
+
+### Available Autogroups
+
+- **`autogroup:internet`**: Matches all traffic from the internet (can only be used in destinations)
+- **`autogroup:member`**: Matches all devices that are direct members of the tailnet (excludes tagged devices)
+- **`autogroup:tagged`**: Matches all devices that have tags assigned
+- **`autogroup:nonroot`**: Matches connections that don't run as root/administrator
+- **`autogroup:self`**: Matches devices owned by the same user as the target device (can only be used in destinations)
+
+### Using `autogroup:self`
+
+The `autogroup:self` autogroup is particularly useful for allowing users to access their own devices while restricting access to devices owned by other users. 
+
+**Important**: `autogroup:self` can only be used in ACL destinations and SSH destinations, not in sources.
+
+#### Example Usage
+
+```json
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["autogroup:member"],
+      "dst": ["autogroup:self:*"]
+    }
+  ]
+}
+```
+
+This rule allows all tailnet members to access devices owned by the same user as themselves. When this rule is processed:
+
+- For a device owned by `user1@`, the rule will only allow access to other devices owned by `user1@`
+- For a device owned by `user2@`, the rule will only allow access to other devices owned by `user2@`
+- Tagged devices are excluded from `autogroup:self` (tags don't have users)
+
+#### Replacing Manual User Rules
+
+Instead of manually listing rules for each user:
+
+```json
+// Old approach - manual rules for each user
+{ "action": "accept", "src": ["user1@"], "dst": ["user1@:*"] },
+{ "action": "accept", "src": ["user2@"], "dst": ["user2@:*"] },
+{ "action": "accept", "src": ["user3@"], "dst": ["user3@:*"] }
+```
+
+You can use a single rule with `autogroup:self`:
+
+```json
+// New approach - single rule using autogroup:self
+{
+  "action": "accept",
+  "src": ["autogroup:member"],
+  "dst": ["autogroup:self:*"]
+}
+```
+
+This automatically provides the same functionality while being much more maintainable and scaling with new users.
