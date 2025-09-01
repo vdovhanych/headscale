@@ -15,7 +15,7 @@ import (
 const MinSupportedCapabilityVersion tailcfg.CapabilityVersion = 90
 
 // CanOldCodeBeCleanedUp is intended to be called on startup to see if
-// there are old code that can ble cleaned up, entries should contain
+// there are old code that can be cleaned up, entries should contain
 // a CapVer where something can be cleaned up and a panic if it can.
 // This is only intended to catch things in tests.
 //

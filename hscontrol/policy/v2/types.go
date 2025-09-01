@@ -1401,8 +1401,8 @@ func (p *Policy) validate() error {
 					errs = append(errs, err)
 				}
 			case *Tag:
-				tagOwner := src
-				if err := p.TagOwners.Contains(tagOwner); err != nil {
+				tag := src
+				if err := p.TagOwners.Contains(tag); err != nil {
 					errs = append(errs, err)
 				}
 			}
@@ -1433,8 +1433,8 @@ func (p *Policy) validate() error {
 					errs = append(errs, err)
 				}
 			case *Tag:
-				tagOwner := dst.Alias.(*Tag)
-				if err := p.TagOwners.Contains(tagOwner); err != nil {
+				tag := dst.Alias.(*Tag)
+				if err := p.TagOwners.Contains(tag); err != nil {
 					errs = append(errs, err)
 				}
 			}
@@ -1476,8 +1476,8 @@ func (p *Policy) validate() error {
 					errs = append(errs, err)
 				}
 			case *Tag:
-				tagOwner := src
-				if err := p.TagOwners.Contains(tagOwner); err != nil {
+				tag := src
+				if err := p.TagOwners.Contains(tag); err != nil {
 					errs = append(errs, err)
 				}
 			}
@@ -1496,8 +1496,8 @@ func (p *Policy) validate() error {
 					continue
 				}
 			case *Tag:
-				tagOwner := dst
-				if err := p.TagOwners.Contains(tagOwner); err != nil {
+				tag := dst
+				if err := p.TagOwners.Contains(tag); err != nil {
 					errs = append(errs, err)
 				}
 			}
@@ -1525,8 +1525,8 @@ func (p *Policy) validate() error {
 					errs = append(errs, err)
 				}
 			case *Tag:
-				tagOwner := approver
-				if err := p.TagOwners.Contains(tagOwner); err != nil {
+				tag := approver
+				if err := p.TagOwners.Contains(tag); err != nil {
 					errs = append(errs, err)
 				}
 			}
@@ -1541,8 +1541,8 @@ func (p *Policy) validate() error {
 				errs = append(errs, err)
 			}
 		case *Tag:
-			tagOwner := approver
-			if err := p.TagOwners.Contains(tagOwner); err != nil {
+			tag := approver
+			if err := p.TagOwners.Contains(tag); err != nil {
 				errs = append(errs, err)
 			}
 		}
