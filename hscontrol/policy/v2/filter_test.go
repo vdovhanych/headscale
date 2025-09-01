@@ -524,6 +524,138 @@ func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
 			}
 		}
 	}
+
+	t.Run("username source with autogroup:self destination", func(t *testing.T) {
+		// Test with specific username as source
+		policy := &Policy{
+			ACLs: []ACL{
+				{
+					Action:  "accept",
+					Sources: []Alias{up("user1@")},
+					Destinations: []AliasWithPorts{
+						aliasWithPorts(agp("autogroup:self"), tailcfg.PortRangeAny),
+					},
+				},
+			},
+		}
+
+		// Validate the policy first
+		err := policy.validate()
+		if err != nil {
+			t.Fatalf("policy validation failed: %v", err)
+		}
+
+		// Test compilation for user1's first node
+		node1 := nodes[0].View()
+
+		rules, err := policy.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rules) != 1 {
+			t.Fatalf("expected 1 rule, got %d", len(rules))
+		}
+
+		rule := rules[0]
+
+		// Since sources is user1@ and destination is autogroup:self for user1's node,
+		// sources should include only user1's untagged devices
+		expectedSourceIPs := []string{"100.64.0.1", "100.64.0.2"}
+
+		for _, expectedIP := range expectedSourceIPs {
+			found := false
+
+			addr := netip.MustParseAddr(expectedIP)
+			for _, prefix := range rule.SrcIPs {
+				pref := netip.MustParsePrefix(prefix)
+				if pref.Contains(addr) {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				t.Errorf("expected source IP %s to be covered by generated prefixes %v", expectedIP, rule.SrcIPs)
+			}
+		}
+	})
+
+	t.Run("no autogroup:self in destinations - standard behavior", func(t *testing.T) {
+		// Test normal ACL without autogroup:self to ensure we don't break existing behavior
+		policy := &Policy{
+			ACLs: []ACL{
+				{
+					Action:  "accept",
+					Sources: []Alias{agp("autogroup:member")},
+					Destinations: []AliasWithPorts{
+						aliasWithPorts(agp("autogroup:member"), tailcfg.PortRangeAny),
+					},
+				},
+			},
+		}
+
+		// Validate the policy first
+		err := policy.validate()
+		if err != nil {
+			t.Fatalf("policy validation failed: %v", err)
+		}
+
+		// Test compilation for user1's first node
+		node1 := nodes[0].View()
+
+		rules, err := policy.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rules) != 1 {
+			t.Fatalf("expected 1 rule, got %d", len(rules))
+		}
+
+		rule := rules[0]
+
+		// Without autogroup:self, all untagged devices should be included in both sources and destinations
+		expectedIPs := []string{"100.64.0.1", "100.64.0.2", "100.64.0.3", "100.64.0.4"}
+
+		// Check sources
+		for _, expectedIP := range expectedIPs {
+			found := false
+
+			addr := netip.MustParseAddr(expectedIP)
+			for _, prefix := range rule.SrcIPs {
+				pref := netip.MustParsePrefix(prefix)
+				if pref.Contains(addr) {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				t.Errorf("expected source IP %s to be covered by generated prefixes %v", expectedIP, rule.SrcIPs)
+			}
+		}
+
+		// Check destinations - need to check if IPs are covered by CIDR prefixes
+		actualDestIPs := make([]string, 0, len(rule.DstPorts))
+		for _, dst := range rule.DstPorts {
+			actualDestIPs = append(actualDestIPs, dst.IP)
+		}
+
+		for _, expectedIP := range expectedIPs {
+			found := false
+
+			addr := netip.MustParseAddr(expectedIP)
+			for _, destCIDR := range actualDestIPs {
+				prefix := netip.MustParsePrefix(destCIDR)
+				if prefix.Contains(addr) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected destination IP %s to be covered by generated prefixes %v", expectedIP, actualDestIPs)
+			}
+		}
+	})
 }
 
 func TestAutogroupSelfInSourceIsRejected(t *testing.T) {
