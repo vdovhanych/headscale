@@ -37,6 +37,10 @@ type PolicyManager struct {
 
 	// Lazy map of SSH policies
 	sshPolicyMap map[types.NodeID]*tailcfg.SSHPolicy
+	
+	// Lazy map of per-node filter rules (for autogroup:self support)
+	filterRulesMap map[types.NodeID][]tailcfg.FilterRule
+	filterRulesMapHash deephash.Sum
 }
 
 // NewPolicyManager creates a new PolicyManager from a policy file and a list of users and nodes.
@@ -49,10 +53,11 @@ func NewPolicyManager(b []byte, users []types.User, nodes views.Slice[types.Node
 	}
 
 	pm := PolicyManager{
-		pol:          policy,
-		users:        users,
-		nodes:        nodes,
-		sshPolicyMap: make(map[types.NodeID]*tailcfg.SSHPolicy, nodes.Len()),
+		pol:            policy,
+		users:          users,
+		nodes:          nodes,
+		sshPolicyMap:   make(map[types.NodeID]*tailcfg.SSHPolicy, nodes.Len()),
+		filterRulesMap: make(map[types.NodeID][]tailcfg.FilterRule, nodes.Len()),
 	}
 
 	_, err = pm.updateLocked()
@@ -71,6 +76,9 @@ func (pm *PolicyManager) updateLocked() (bool, error) {
 	// policies for nodes that have changed. Particularly if the only difference is
 	// that nodes has been added or removed.
 	clear(pm.sshPolicyMap)
+	
+	// Clear the per-node filter rules map when policy changes
+	clear(pm.filterRulesMap)
 
 	filter, err := pm.pol.compileFilterRules(pm.users, pm.nodes)
 	if err != nil {
@@ -166,6 +174,33 @@ func (pm *PolicyManager) Filter() ([]tailcfg.FilterRule, []matcher.Match) {
 	defer pm.mu.Unlock()
 
 	return pm.filter, pm.matchers
+}
+
+// FilterForNode returns filter rules compiled specifically for the given node.
+// This supports autogroup:self by using the node's context for resolution.
+func (pm *PolicyManager) FilterForNode(node types.NodeView) ([]tailcfg.FilterRule, error) {
+	if pm == nil {
+		return nil, nil
+	}
+
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	// Check if we have cached filter rules for this node
+	if filterRules, ok := pm.filterRulesMap[node.ID()]; ok {
+		return filterRules, nil
+	}
+
+	// Compile filter rules specifically for this node
+	filterRules, err := pm.pol.compileFilterRulesForNode(pm.users, pm.nodes, node)
+	if err != nil {
+		return nil, fmt.Errorf("compiling filter rules for node %q: %w", node.Hostname(), err)
+	}
+
+	// Cache the compiled rules
+	pm.filterRulesMap[node.ID()] = filterRules
+
+	return filterRules, nil
 }
 
 // SetUsers updates the users in the policy manager and updates the filter rules.

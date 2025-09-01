@@ -439,7 +439,7 @@ func TestUnmarshalPolicy(t *testing.T) {
 	],
 }
 `,
-			wantErr: `AutoGroup is invalid, got: "autogroup:invalid", must be one of [autogroup:internet autogroup:member autogroup:nonroot autogroup:tagged]`,
+			wantErr: `AutoGroup is invalid, got: "autogroup:invalid", must be one of [autogroup:internet autogroup:member autogroup:nonroot autogroup:tagged autogroup:self]`,
 		},
 		{
 			name: "undefined-hostname-errors-2490",
@@ -552,6 +552,59 @@ func TestUnmarshalPolicy(t *testing.T) {
 }
 `,
 			wantErr: `"autogroup:internet" used in source, it can only be used in ACL destinations`,
+		},
+		{
+			name: "autogroup:self-in-src-not-allowed",
+			input: `
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": [
+        "autogroup:self"
+      ],
+      "dst": [
+        "10.0.0.1:*"
+      ]
+    }
+  ]
+}
+`,
+			wantErr: `autogroup "autogroup:self" is not supported for ACL sources`,
+		},
+		{
+			name: "autogroup:self-in-dst-allowed",
+			input: `
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": [
+        "autogroup:member"
+      ],
+      "dst": [
+        "autogroup:self:*"
+      ]
+    }
+  ]
+}
+`,
+			want: &Policy{
+				ACLs: []ACL{
+					{
+						Action: "accept",
+						Sources: Aliases{
+							ptr.To(AutoGroup("autogroup:member")),
+						},
+						Destinations: []AliasWithPorts{
+							{
+								Alias: ptr.To(AutoGroup("autogroup:self")),
+								Ports: []tailcfg.PortRange{tailcfg.PortRangeAny},
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name: "autogroup:internet-in-ssh-src-not-allowed",

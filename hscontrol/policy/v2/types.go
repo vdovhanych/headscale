@@ -487,6 +487,7 @@ var autogroups = []AutoGroup{
 	AutoGroupMember,
 	AutoGroupNonRoot,
 	AutoGroupTagged,
+	AutoGroupSelf,
 }
 
 func (ag AutoGroup) Validate() error {
@@ -576,6 +577,13 @@ func (ag AutoGroup) Resolve(p *Policy, users types.Users, nodes views.Slice[type
 			}
 		}
 
+		return build.IPSet()
+
+	case AutoGroupSelf:
+		// autogroup:self requires per-node compilation context to work properly.
+		// For now, we return an empty set as this should only be resolved in 
+		// per-node compilation context via compileFilterRulesForNode.
+		// This maintains backwards compatibility while allowing validation to pass.
 		return build.IPSet()
 
 	default:
@@ -1271,11 +1279,11 @@ type Policy struct {
 var (
 	// TODO(kradalby): Add these checks for tagOwners and autoApprovers.
 	autogroupForSrc       = []AutoGroup{AutoGroupMember, AutoGroupTagged}
-	autogroupForDst       = []AutoGroup{AutoGroupInternet, AutoGroupMember, AutoGroupTagged}
+	autogroupForDst       = []AutoGroup{AutoGroupInternet, AutoGroupMember, AutoGroupTagged, AutoGroupSelf}
 	autogroupForSSHSrc    = []AutoGroup{AutoGroupMember, AutoGroupTagged}
 	autogroupForSSHDst    = []AutoGroup{AutoGroupMember, AutoGroupTagged}
 	autogroupForSSHUser   = []AutoGroup{AutoGroupNonRoot}
-	autogroupNotSupported = []AutoGroup{AutoGroupSelf}
+	autogroupNotSupported = []AutoGroup{}
 )
 
 func validateAutogroupSupported(ag *AutoGroup) error {

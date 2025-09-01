@@ -87,6 +87,106 @@ func (pol *Policy) compileFilterRules(
 	return rules, nil
 }
 
+// compileFilterRulesForNode takes a set of nodes, an ACLPolicy and a target node,
+// and generates a set of Tailscale compatible FilterRules used to allow traffic on clients.
+// This method supports autogroup:self by using the target node's context for resolution.
+func (pol *Policy) compileFilterRulesForNode(
+	users types.Users,
+	nodes views.Slice[types.NodeView],
+	targetNode types.NodeView,
+) ([]tailcfg.FilterRule, error) {
+	if pol == nil {
+		return tailcfg.FilterAllowAll, nil
+	}
+
+	var rules []tailcfg.FilterRule
+
+	for _, acl := range pol.ACLs {
+		if acl.Action != "accept" {
+			return nil, ErrInvalidAction
+		}
+
+		// Check if this ACL has autogroup:self in destinations
+		hasAutogroupSelf := false
+		for _, dest := range acl.Destinations {
+			if alias, ok := dest.Alias.(*AutoGroup); ok && alias.Is(AutoGroupSelf) {
+				hasAutogroupSelf = true
+				break
+			}
+		}
+
+		// Resolve sources with potential filtering for autogroup:self
+		var srcIPs *netipx.IPSet
+		var err error
+		if hasAutogroupSelf {
+			// When autogroup:self is in destinations, filter sources to only include 
+			// devices from the same user as the target node
+			srcIPs, err = pol.resolveSourcesForAutogroupSelf(acl.Sources, users, nodes, targetNode)
+		} else {
+			srcIPs, err = acl.Sources.Resolve(pol, users, nodes)
+		}
+		
+		if err != nil {
+			log.Trace().Err(err).Msgf("resolving source ips")
+		}
+
+		if srcIPs == nil || len(srcIPs.Prefixes()) == 0 {
+			continue
+		}
+
+		// TODO(kradalby): integrate type into schema
+		// TODO(kradalby): figure out the _ is wildcard stuff
+		protocols, _, err := parseProtocol(acl.Protocol)
+		if err != nil {
+			return nil, fmt.Errorf("parsing policy, protocol err: %w ", err)
+		}
+
+		var destPorts []tailcfg.NetPortRange
+		for _, dest := range acl.Destinations {
+			var ips *netipx.IPSet
+			// Handle autogroup:self resolution in per-node context
+			if alias, ok := dest.Alias.(*AutoGroup); ok && alias.Is(AutoGroupSelf) {
+				ips, err = pol.resolveAutogroupSelfForNode(users, nodes, targetNode)
+			} else {
+				ips, err = dest.Resolve(pol, users, nodes)
+			}
+			
+			if err != nil {
+				log.Trace().Err(err).Msgf("resolving destination ips")
+			}
+
+			if ips == nil {
+				log.Debug().Msgf("destination resolved to nil ips: %v", dest)
+				continue
+			}
+
+			prefixes := ips.Prefixes()
+
+			for _, pref := range prefixes {
+				for _, port := range dest.Ports {
+					pr := tailcfg.NetPortRange{
+						IP:    pref.String(),
+						Ports: port,
+					}
+					destPorts = append(destPorts, pr)
+				}
+			}
+		}
+
+		if len(destPorts) == 0 {
+			continue
+		}
+
+		rules = append(rules, tailcfg.FilterRule{
+			SrcIPs:   ipSetToPrefixStringList(srcIPs),
+			DstPorts: destPorts,
+			IPProto:  protocols,
+		})
+	}
+
+	return rules, nil
+}
+
 func sshAction(accept bool, duration time.Duration) tailcfg.SSHAction {
 	return tailcfg.SSHAction{
 		Reject:                   !accept,
@@ -180,4 +280,93 @@ func ipSetToPrefixStringList(ips *netipx.IPSet) []string {
 	}
 
 	return out
+}
+
+// resolveAutogroupSelfForNode resolves autogroup:self in the context of a target node.
+// It returns all untagged devices belonging to the same user as the target node.
+func (pol *Policy) resolveAutogroupSelfForNode(
+	users types.Users,
+	nodes views.Slice[types.NodeView],
+	targetNode types.NodeView,
+) (*netipx.IPSet, error) {
+	var build netipx.IPSetBuilder
+
+	// Skip if target node is tagged - autogroup:self doesn't apply to tagged devices
+	if targetNode.IsTagged() {
+		return build.IPSet()
+	}
+
+	targetUser := targetNode.User()
+
+	for _, node := range nodes.All() {
+		// Skip tagged nodes - autogroup:self only includes untagged devices
+		if node.IsTagged() {
+			continue
+		}
+
+		// Include only nodes belonging to the same user as the target node
+		if node.User().ID == targetUser.ID {
+			node.AppendToIPSet(&build)
+		}
+	}
+
+	return build.IPSet()
+}
+
+// resolveSourcesForAutogroupSelf resolves sources when autogroup:self is used as destination.
+// It filters the sources to only include devices from the same user as the target node.
+func (pol *Policy) resolveSourcesForAutogroupSelf(
+	sources []Alias,
+	users types.Users,
+	nodes views.Slice[types.NodeView],
+	targetNode types.NodeView,
+) (*netipx.IPSet, error) {
+	var errs []error
+	var build netipx.IPSetBuilder
+
+	// Skip if target node is tagged - autogroup:self doesn't apply to tagged devices
+	if targetNode.IsTagged() {
+		return build.IPSet()
+	}
+
+	targetUser := targetNode.User()
+
+	for _, src := range sources {
+		// Resolve the source normally first
+		ips, err := src.Resolve(pol, users, nodes)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
+		if ips == nil {
+			continue
+		}
+
+		// For autogroup:self destinations, we need to filter sources to only include
+		// devices from the same user as the target node
+		var filteredBuild netipx.IPSetBuilder
+		
+		for _, node := range nodes.All() {
+			// Only include nodes from the same user as target
+			if node.User().ID != targetUser.ID {
+				continue
+			}
+
+			// Check if this node's IPs are included in the resolved source IPs
+			if node.InIPSet(ips) {
+				node.AppendToIPSet(&filteredBuild)
+			}
+		}
+
+		filteredIPs, err := filteredBuild.IPSet()
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
+		build.AddSet(filteredIPs)
+	}
+
+	return buildIPSetMultiErr(&build, errs)
 }
