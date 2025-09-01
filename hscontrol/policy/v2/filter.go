@@ -128,25 +128,86 @@ func (pol *Policy) compileACLWithAutogroupSelf(
 	node types.NodeView,
 	nodes views.Slice[types.NodeView],
 ) (*tailcfg.FilterRule, error) {
-	var srcIPs netipx.IPSetBuilder
+	// Check if this ACL has autogroup:self in destinations
+	hasAutogroupSelf := false
+	for _, dest := range acl.Destinations {
+		if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+			hasAutogroupSelf = true
+			break
+		}
+	}
 
-	for _, src := range acl.Sources {
-		if ag, ok := src.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
-			for _, n := range nodes.All() {
-				if n.User().ID == node.User().ID && !n.IsTagged() {
-					n.AppendToIPSet(&srcIPs)
-				}
-			}
-		} else {
-			ips, err := src.Resolve(pol, users, nodes)
+	// If this ACL doesn't use autogroup:self, fall back to standard compilation
+	if !hasAutogroupSelf {
+		// Use standard resolution for all aliases
+		srcIPs, err := resolveACLSources(pol, acl.Sources, users, nodes)
+		if err != nil {
+			return nil, err
+		}
+
+		if srcIPs == nil || len(srcIPs.Prefixes()) == 0 {
+			return nil, nil
+		}
+
+		protocols, _, err := parseProtocol(acl.Protocol)
+		if err != nil {
+			return nil, fmt.Errorf("parsing policy, protocol err: %w ", err)
+		}
+
+		var destPorts []tailcfg.NetPortRange
+		for _, dest := range acl.Destinations {
+			ips, err := dest.Resolve(pol, users, nodes)
 			if err != nil {
-				log.Trace().Err(err).Msgf("resolving source ips")
+				log.Trace().Err(err).Msgf("resolving destination ips")
 				continue
 			}
 
-			if ips != nil {
-				srcIPs.AddSet(ips)
+			if ips == nil {
+				log.Debug().Msgf("destination resolved to nil ips: %v", dest)
+				continue
 			}
+
+			prefixes := ips.Prefixes()
+			for _, pref := range prefixes {
+				for _, port := range dest.Ports {
+					pr := tailcfg.NetPortRange{
+						IP:    pref.String(),
+						Ports: port,
+					}
+					destPorts = append(destPorts, pr)
+				}
+			}
+		}
+
+		if len(destPorts) == 0 {
+			return &tailcfg.FilterRule{}, nil
+		}
+
+		return &tailcfg.FilterRule{
+			SrcIPs:   ipSetToPrefixStringList(srcIPs),
+			DstPorts: destPorts,
+			IPProto:  protocols,
+		}, nil
+	}
+
+	// Handle ACLs with autogroup:self in destinations
+	var srcIPs netipx.IPSetBuilder
+
+	// For ACLs with autogroup:self destinations, sources must be filtered 
+	// to only include devices from the same user as the target node
+	for _, src := range acl.Sources {
+		// Sources are never autogroup:self (validation prevents this)
+		// Instead, we resolve the source normally, then filter to same user
+		ips, err := src.Resolve(pol, users, nodes)
+		if err != nil {
+			log.Trace().Err(err).Msgf("resolving source ips")
+			continue
+		}
+
+		if ips != nil {
+			// Filter source IPs to only include devices from the same user
+			filteredIPs := filterIPSetToSameUser(ips, nodes, types.UserID(node.User().ID))
+			srcIPs.AddSet(filteredIPs)
 		}
 	}
 
@@ -216,6 +277,44 @@ func (pol *Policy) compileACLWithAutogroupSelf(
 		DstPorts: destPorts,
 		IPProto:  protocols,
 	}, nil
+}
+
+// resolveACLSources resolves ACL sources to an IPSet
+func resolveACLSources(pol *Policy, sources []Alias, users types.Users, nodes views.Slice[types.NodeView]) (*netipx.IPSet, error) {
+	var srcIPs netipx.IPSetBuilder
+
+	for _, src := range sources {
+		ips, err := src.Resolve(pol, users, nodes)
+		if err != nil {
+			log.Trace().Err(err).Msgf("resolving source ips")
+			continue
+		}
+
+		if ips != nil {
+			srcIPs.AddSet(ips)
+		}
+	}
+
+	return srcIPs.IPSet()
+}
+
+// filterIPSetToSameUser filters an IPSet to only include nodes from the specified user
+func filterIPSetToSameUser(ipSet *netipx.IPSet, nodes views.Slice[types.NodeView], userID types.UserID) *netipx.IPSet {
+	var filteredIPs netipx.IPSetBuilder
+
+	for _, node := range nodes.All() {
+		if node.User().ID == uint(userID) && !node.IsTagged() {
+			// Check if any of this node's IPs are in the original IPSet
+			for _, ip := range node.IPs() {
+				if ipSet.Contains(ip) {
+					filteredIPs.Add(ip)
+				}
+			}
+		}
+	}
+
+	set, _ := filteredIPs.IPSet()
+	return set
 }
 
 func sshAction(accept bool, duration time.Duration) tailcfg.SSHAction {

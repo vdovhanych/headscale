@@ -455,14 +455,14 @@ func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
 	}
 
 	// Check that the rule includes:
-	// - Sources: all untagged devices (autogroup:member excludes tagged devices)
+	// - Sources: only user1's untagged devices (autogroup:member filtered to same user due to autogroup:self)
 	// - Destinations: only user1's untagged devices (autogroup:self excludes tagged devices)
 	rule := rules[0]
 
-	// Sources should include only untagged devices (autogroup:member excludes tagged devices)
-	// Note: IPSet automatically consolidates adjacent IPs into CIDR blocks for efficiency
-	// So we check that the expected IPs are covered by the generated prefixes
-	expectedSourceIPs := []string{"100.64.0.1", "100.64.0.2", "100.64.0.3", "100.64.0.4"}
+	// Sources should include only untagged devices from the same user as the destination
+	// Since we're testing for user1's node, sources should only include user1's devices
+	// This is the key behavior of autogroup:self - it filters sources to the same user
+	expectedSourceIPs := []string{"100.64.0.1", "100.64.0.2"}
 
 	for _, expectedIP := range expectedSourceIPs {
 		found := false
@@ -481,8 +481,8 @@ func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
 		}
 	}
 
-	// Verify that tagged devices are NOT included in sources
-	excludedSourceIPs := []string{"100.64.0.5", "100.64.0.6"}
+	// Verify that other users' devices and tagged devices are NOT included in sources
+	excludedSourceIPs := []string{"100.64.0.3", "100.64.0.4", "100.64.0.5", "100.64.0.6"}
 	for _, excludedIP := range excludedSourceIPs {
 		addr := netip.MustParseAddr(excludedIP)
 		for _, prefix := range rule.SrcIPs {
@@ -520,7 +520,7 @@ func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
 	for _, excludedIP := range excludedDestIPs {
 		for _, actualIP := range actualDestIPs {
 			if actualIP == excludedIP {
-				t.Errorf("SECURITY: destination IP %s should NOT be included but found in destinations", excludedIP)
+				t.Errorf("SECURITY: destination IP %s should NOT be included (other user or tagged device) but found in destinations", excludedIP)
 			}
 		}
 	}

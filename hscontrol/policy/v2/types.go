@@ -1306,6 +1306,10 @@ func validateAutogroupForSrc(src *AutoGroup) error {
 		return errors.New(`"autogroup:internet" used in source, it can only be used in ACL destinations`)
 	}
 
+	if src.Is(AutoGroupSelf) {
+		return errors.New(`"autogroup:self" used in source, it can only be used in ACL destinations`)
+	}
+
 	if !slices.Contains(autogroupForSrc, *src) {
 		return fmt.Errorf("autogroup %q is not supported for ACL sources, can be %v", *src, autogroupForSrc)
 	}
