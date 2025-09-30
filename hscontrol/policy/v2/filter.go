@@ -123,23 +123,58 @@ func (pol *Policy) compileACLWithAutogroupSelf(
 	node types.NodeView,
 	nodes views.Slice[types.NodeView],
 ) (*tailcfg.FilterRule, error) {
+	// Check if any destination uses autogroup:self
+	hasAutogroupSelfInDst := false
+	for _, dest := range acl.Destinations {
+		if ag, ok := dest.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+			hasAutogroupSelfInDst = true
+			break
+		}
+	}
+
 	var srcIPs netipx.IPSetBuilder
 
+	// Resolve sources
+	// ALL sources (autogroup:member, group:xxx, user@) are filtered
+	// to only include devices from the same user as the target node.
 	for _, src := range acl.Sources {
+		// autogroup:self is not allowed in sources (validated earlier)
+		// but we add a defensive check here
 		if ag, ok := src.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
-			for _, n := range nodes.All() {
-				if n.User().ID == node.User().ID && !n.IsTagged() {
-					n.AppendToIPSet(&srcIPs)
-				}
-			}
-		} else {
-			ips, err := src.Resolve(pol, users, nodes)
-			if err != nil {
-				log.Trace().Err(err).Msgf("resolving source ips")
-				continue
-			}
+			return nil, fmt.Errorf("autogroup:self cannot be used in sources")
+		}
 
-			if ips != nil {
+		ips, err := src.Resolve(pol, users, nodes)
+		if err != nil {
+			log.Trace().Err(err).Msgf("resolving source ips")
+			continue
+		}
+
+		if ips != nil {
+			// If autogroup:self is in destination, filter the resolved sources
+			// to only include devices from the target node's user
+			if hasAutogroupSelfInDst {
+				// Build IPSet of only the target user's devices
+				var userIPs netipx.IPSetBuilder
+				for _, n := range nodes.All() {
+					if n.User().ID == node.User().ID && !n.IsTagged() {
+						n.AppendToIPSet(&userIPs)
+					}
+				}
+				userIPSet, err := userIPs.IPSet()
+				if err != nil {
+					return nil, err
+				}
+
+				// Intersect the resolved source IPs with the target user's devices
+				// netipx.IPSet doesn't have Intersect, so we manually filter
+				for addr := range util.IPSetAddrIter(ips) {
+					if userIPSet.Contains(addr) {
+						srcIPs.Add(addr)
+					}
+				}
+			} else {
+				// No autogroup:self in destination, use all resolved sources
 				srcIPs.AddSet(ips)
 			}
 		}
@@ -154,10 +189,7 @@ func (pol *Policy) compileACLWithAutogroupSelf(
 		return nil, nil
 	}
 
-	protocols, _, err := parseProtocol(acl.Protocol)
-	if err != nil {
-		return nil, fmt.Errorf("parsing policy, protocol err: %w ", err)
-	}
+	protocols, _ := acl.Protocol.parseProtocol()
 
 	var destPorts []tailcfg.NetPortRange
 

@@ -863,14 +863,15 @@ func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
 	}
 
 	// Check that the rule includes:
-	// - Sources: all untagged devices (autogroup:member excludes tagged devices)
-	// - Destinations: only user1's untagged devices (autogroup:self excludes tagged devices)
+	// - Sources: only user1's untagged devices (filtered by autogroup:self semantics)
+	// - Destinations: only user1's untagged devices (autogroup:self)
 	rule := rules[0]
 
-	// Sources should include only untagged devices (autogroup:member excludes tagged devices)
+	// Sources should ONLY include user1's untagged devices (100.64.0.1, 100.64.0.2)
+	// NOT all members, because autogroup:self in destination filters sources to same user
 	// Note: IPSet automatically consolidates adjacent IPs into CIDR blocks for efficiency
 	// So we check that the expected IPs are covered by the generated prefixes
-	expectedSourceIPs := []string{"100.64.0.1", "100.64.0.2", "100.64.0.3", "100.64.0.4"}
+	expectedSourceIPs := []string{"100.64.0.1", "100.64.0.2"}
 
 	for _, expectedIP := range expectedSourceIPs {
 		found := false
@@ -889,14 +890,15 @@ func TestCompileFilterRulesForNodeWithAutogroupSelf(t *testing.T) {
 		}
 	}
 
-	// Verify that tagged devices are NOT included in sources
-	excludedSourceIPs := []string{"100.64.0.5", "100.64.0.6"}
+	// Verify that other users' devices and tagged devices are NOT included in sources
+	// This is CRITICAL for security: autogroup:self in destination means ONLY same-user sources
+	excludedSourceIPs := []string{"100.64.0.3", "100.64.0.4", "100.64.0.5", "100.64.0.6"}
 	for _, excludedIP := range excludedSourceIPs {
 		addr := netip.MustParseAddr(excludedIP)
 		for _, prefix := range rule.SrcIPs {
 			pref := netip.MustParsePrefix(prefix)
 			if pref.Contains(addr) {
-				t.Errorf("SECURITY: source IP %s should NOT be included (tagged device) but found in prefix %s", excludedIP, prefix)
+				t.Errorf("SECURITY VIOLATION: source IP %s should NOT be included but found in prefix %s", excludedIP, prefix)
 			}
 		}
 	}
@@ -956,6 +958,140 @@ func TestAutogroupSelfInSourceIsRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "autogroup:self") {
 		t.Errorf("expected error message to mention autogroup:self, got: %v", err)
 	}
+}
+
+// TestAutogroupSelfWithSpecificUserSource verifies that when autogroup:self is in
+// the destination and a specific user is in the source, only that user's devices
+// are allowed (and only if they match the target user).
+func TestAutogroupSelfWithSpecificUserSource(t *testing.T) {
+	users := types.Users{
+		{Model: gorm.Model{ID: 1}, Name: "user1"},
+		{Model: gorm.Model{ID: 2}, Name: "user2"},
+	}
+
+	nodes := types.Nodes{
+		{User: users[0], IPv4: ap("100.64.0.1")},
+		{User: users[0], IPv4: ap("100.64.0.2")},
+		{User: users[1], IPv4: ap("100.64.0.3")},
+		{User: users[1], IPv4: ap("100.64.0.4")},
+	}
+
+	// Policy: user1 devices can access autogroup:self (their own devices)
+	policy := &Policy{
+		ACLs: []ACL{
+			{
+				Action:  "accept",
+				Sources: []Alias{up("user1@")},
+				Destinations: []AliasWithPorts{
+					aliasWithPorts(agp("autogroup:self"), tailcfg.PortRangeAny),
+				},
+			},
+		},
+	}
+
+	err := policy.validate()
+	require.NoError(t, err)
+
+	// For user1's node: sources should be user1's devices (intersection of user1@ and same-user filter)
+	node1 := nodes[0].View()
+	rules, err := policy.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+
+	// Sources should be user1's devices (100.64.0.1, 100.64.0.2)
+	expectedSourceIPs := []string{"100.64.0.1", "100.64.0.2"}
+	for _, expectedIP := range expectedSourceIPs {
+		found := false
+		addr := netip.MustParseAddr(expectedIP)
+		for _, prefix := range rules[0].SrcIPs {
+			pref := netip.MustParsePrefix(prefix)
+			if pref.Contains(addr) {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected source IP %s to be present", expectedIP)
+	}
+
+	// Destinations should be user1's devices (100.64.0.1, 100.64.0.2)
+	actualDestIPs := make([]string, 0, len(rules[0].DstPorts))
+	for _, dst := range rules[0].DstPorts {
+		actualDestIPs = append(actualDestIPs, dst.IP)
+	}
+	assert.ElementsMatch(t, expectedSourceIPs, actualDestIPs)
+
+	// For user2's node: sources should be EMPTY (user1@ ∩ user2's devices = ∅)
+	node2 := nodes[2].View()
+	rules2, err := policy.compileFilterRulesForNode(users, node2, nodes.ViewSlice())
+	require.NoError(t, err)
+	// Should have no rules because the intersection is empty
+	assert.Len(t, rules2, 0, "user2's node should have no rules (user1@ devices can't match user2's self)")
+}
+
+// TestAutogroupSelfWithGroupSource verifies that when a group is used as source
+// and autogroup:self as destination, only group members who are the same user
+// as the target are allowed.
+func TestAutogroupSelfWithGroupSource(t *testing.T) {
+	users := types.Users{
+		{Model: gorm.Model{ID: 1}, Name: "user1"},
+		{Model: gorm.Model{ID: 2}, Name: "user2"},
+		{Model: gorm.Model{ID: 3}, Name: "user3"},
+	}
+
+	nodes := types.Nodes{
+		{User: users[0], IPv4: ap("100.64.0.1")},
+		{User: users[0], IPv4: ap("100.64.0.2")},
+		{User: users[1], IPv4: ap("100.64.0.3")},
+		{User: users[1], IPv4: ap("100.64.0.4")},
+		{User: users[2], IPv4: ap("100.64.0.5")},
+	}
+
+	// Group contains user1 and user2
+	policy := &Policy{
+		Groups: Groups{
+			Group("group:admins"): []Username{Username("user1@"), Username("user2@")},
+		},
+		ACLs: []ACL{
+			{
+				Action:  "accept",
+				Sources: []Alias{gp("group:admins")},
+				Destinations: []AliasWithPorts{
+					aliasWithPorts(agp("autogroup:self"), tailcfg.PortRangeAny),
+				},
+			},
+		},
+	}
+
+	err := policy.validate()
+	require.NoError(t, err)
+
+	// For user1's node: sources should be only user1's devices
+	// (group:admins has user1+user2, but autogroup:self filters to same user)
+	node1 := nodes[0].View()
+	rules, err := policy.compileFilterRulesForNode(users, node1, nodes.ViewSlice())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+
+	// Sources: only user1's devices
+	expectedSrcIPs := []string{"100.64.0.1", "100.64.0.2"}
+	for _, expectedIP := range expectedSrcIPs {
+		found := false
+		addr := netip.MustParseAddr(expectedIP)
+		for _, prefix := range rules[0].SrcIPs {
+			pref := netip.MustParsePrefix(prefix)
+			if pref.Contains(addr) {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected source IP %s for user1", expectedIP)
+	}
+
+	// User3's node should have no rules (not in group:admins)
+	node3 := nodes[4].View()
+	rules3, err := policy.compileFilterRulesForNode(users, node3, nodes.ViewSlice())
+	require.NoError(t, err)
+	assert.Len(t, rules3, 0, "user3 should have no rules")
 }
 
 // Helper function to create IP addresses for testing

@@ -299,11 +299,64 @@ func (pm *PolicyManager) SetNodes(nodes views.Slice[types.NodeView]) (bool, erro
 
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
+
+	// If using autogroup:self, optimize by only clearing affected nodes
+	if pm.usesAutogroupSelf {
+		// Find which users have changed (nodes added/removed/modified)
+		affectedUsers := pm.findAffectedUsers(pm.nodes, nodes)
+
+		// Only clear filter rules for nodes belonging to affected users
+		for nodeID := range pm.filterRulesMap {
+			// Find the node to check its user
+			for _, node := range nodes.All() {
+				if node.ID() == nodeID {
+					if _, affected := affectedUsers[node.User().ID]; affected {
+						delete(pm.filterRulesMap, nodeID)
+					}
+					break
+				}
+			}
+		}
+	} else {
+		// Not using autogroup:self, clear all per-node filter rules
+		clear(pm.filterRulesMap)
+	}
+
 	pm.nodes = nodes
 
-	clear(pm.filterRulesMap)
-
 	return pm.updateLocked()
+}
+
+// findAffectedUsers returns a set of user IDs whose nodes have changed between old and new node lists.
+func (pm *PolicyManager) findAffectedUsers(oldNodes, newNodes views.Slice[types.NodeView]) map[uint]struct{} {
+	affectedUsers := make(map[uint]struct{})
+
+	// Build maps of node IDs to users for quick lookup
+	oldNodeMap := make(map[types.NodeID]uint)
+	for _, node := range oldNodes.All() {
+		oldNodeMap[node.ID()] = node.User().ID
+	}
+
+	newNodeMap := make(map[types.NodeID]uint)
+	for _, node := range newNodes.All() {
+		newNodeMap[node.ID()] = node.User().ID
+	}
+
+	// Find removed nodes - their users are affected
+	for nodeID, userID := range oldNodeMap {
+		if _, exists := newNodeMap[nodeID]; !exists {
+			affectedUsers[userID] = struct{}{}
+		}
+	}
+
+	// Find added nodes - their users are affected
+	for nodeID, userID := range newNodeMap {
+		if _, exists := oldNodeMap[nodeID]; !exists {
+			affectedUsers[userID] = struct{}{}
+		}
+	}
+
+	return affectedUsers
 }
 
 func (pm *PolicyManager) NodeCanHaveTag(node types.NodeView, tag string) bool {
