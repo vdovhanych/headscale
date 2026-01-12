@@ -521,6 +521,61 @@ func TestAutogroupSelfWithOtherRules(t *testing.T) {
 	require.NotEmpty(t, rules, "test-1 should have filter rules from both ACL rules")
 }
 
+func TestAutogroupSelfKeepsTaggedPeersVisible(t *testing.T) {
+	users := types.Users{
+		{Model: gorm.Model{ID: 1}, Name: "alice", Email: "alice@example.com"},
+	}
+
+	admin1 := node("admin-1", "100.64.0.1", "fd7a:115c:a1e0::1", users[0], &tailcfg.Hostinfo{})
+	admin1.ID = 1
+	admin2 := node("admin-2", "100.64.0.2", "fd7a:115c:a1e0::2", users[0], &tailcfg.Hostinfo{})
+	admin2.ID = 2
+	tagged := node("tagged-1", "100.64.0.3", "fd7a:115c:a1e0::3", users[0], &tailcfg.Hostinfo{})
+	tagged.ID = 3
+	tagged.Tags = []string{"tag:foo"}
+
+	nodes := types.Nodes{admin1, admin2, tagged}
+
+	policy := `{
+		"groups": {
+			"group:admin": ["alice@example.com"]
+		},
+		"tagOwners": {
+			"tag:foo": ["group:admin"]
+		},
+		"acls": [
+			{
+				"action": "accept",
+				"src": ["group:admin"],
+				"dst": ["*:*"]
+			},
+			{
+				"action": "accept",
+				"src": ["autogroup:member"],
+				"dst": ["autogroup:self:*"]
+			}
+		]
+	}`
+
+	pm, err := NewPolicyManager([]byte(policy), users, nodes.ViewSlice())
+	require.NoError(t, err)
+
+	peerMap := pm.BuildPeerMap(nodes.ViewSlice())
+
+	require.True(t, slices.ContainsFunc(peerMap[admin1.ID], func(n types.NodeView) bool {
+		return n.ID() == tagged.ID
+	}), "admin-1 should see tagged node")
+	require.True(t, slices.ContainsFunc(peerMap[admin2.ID], func(n types.NodeView) bool {
+		return n.ID() == tagged.ID
+	}), "admin-2 should see tagged node")
+	require.True(t, slices.ContainsFunc(peerMap[tagged.ID], func(n types.NodeView) bool {
+		return n.ID() == admin1.ID
+	}), "tagged node should see admin-1")
+	require.True(t, slices.ContainsFunc(peerMap[tagged.ID], func(n types.NodeView) bool {
+		return n.ID() == admin2.ID
+	}), "tagged node should see admin-2")
+}
+
 // TestAutogroupSelfPolicyUpdateTriggersMapResponse verifies that when a policy with
 // autogroup:self is updated, SetPolicy returns true to trigger MapResponse updates,
 // even if the global filter hash didn't change (which is always empty for autogroup:self).

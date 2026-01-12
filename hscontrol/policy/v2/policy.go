@@ -332,14 +332,37 @@ func (pm *PolicyManager) BuildPeerMap(nodes views.Slice[types.NodeView]) map[typ
 			nodeJ := nodes.At(j)
 			matchersJ, hasFilterJ := nodeMatchers[nodeJ.ID()]
 
-			// Check if nodeI can access nodeJ
-			if hasFilterI && nodeI.CanAccess(matchersI, nodeJ) {
-				ret[nodeI.ID()] = append(ret[nodeI.ID()], nodeJ)
-			}
+			canI := hasFilterI && nodeI.CanAccess(matchersI, nodeJ)
+			canJ := hasFilterJ && nodeJ.CanAccess(matchersJ, nodeI)
 
-			// Check if nodeJ can access nodeI
-			if hasFilterJ && nodeJ.CanAccess(matchersJ, nodeI) {
-				ret[nodeJ.ID()] = append(ret[nodeJ.ID()], nodeI)
+			// For connectivity, peer visibility must be symmetric when:
+			// 1. A user-owned node can access a tagged node (autogroup:self case)
+			//    Tagged nodes can't use autogroup:self, so we need symmetric visibility
+			//    to allow the tagged node to see the user-owned node for return traffic.
+			// 2. OR both nodes can access each other (bidirectional access)
+			// Otherwise, maintain asymmetric visibility as defined by ACLs
+			isTaggedI := nodeI.IsTagged()
+			isTaggedJ := nodeJ.IsTagged()
+			// Only apply symmetric visibility when user-owned node can access tagged node
+			// (not the reverse, to preserve proper ACL enforcement)
+			userOwnedToTagged := (!isTaggedI && isTaggedJ && canI) || (!isTaggedJ && isTaggedI && canJ)
+			needsSymmetricVisibility := userOwnedToTagged || (canI && canJ)
+
+			if canI || canJ {
+				if needsSymmetricVisibility {
+					// Both nodes see each other for connectivity
+					ret[nodeI.ID()] = append(ret[nodeI.ID()], nodeJ)
+					ret[nodeJ.ID()] = append(ret[nodeJ.ID()], nodeI)
+				} else {
+					// Maintain asymmetric visibility as defined by ACLs
+					if canI {
+						ret[nodeI.ID()] = append(ret[nodeI.ID()], nodeJ)
+					}
+
+					if canJ {
+						ret[nodeJ.ID()] = append(ret[nodeJ.ID()], nodeI)
+					}
+				}
 			}
 		}
 	}
