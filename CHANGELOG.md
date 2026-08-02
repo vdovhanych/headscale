@@ -44,6 +44,7 @@ keys remain all-access.
 
 - Expiring or deleting a non-existent pre-auth key now returns an error instead of silently succeeding [#3324](https://github.com/juanfont/headscale/pull/3324)
 - Improve systemd service file hardening [#3341](https://github.com/juanfont/headscale/pull/3341)
+- Fix exit node not offered to viewers whose only matching rule is a `via` grant [#3408](https://github.com/juanfont/headscale/issues/3408)
 
 ## 0.29.3 (2026-07-29)
 

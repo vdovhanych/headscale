@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juanfont/headscale/hscontrol/policy"
+	"github.com/juanfont/headscale/hscontrol/policy/matcher"
 	"github.com/juanfont/headscale/hscontrol/state"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/types/change"
@@ -432,10 +432,61 @@ func (m *mapper) buildFromChange(
 	return builder.Build()
 }
 
+// reducePeers filters candidate peers down to those visible to node under
+// the live policy. A rule authorising the pair may live in either node's
+// matchers: per-node grants emit rules only on specific nodes — a via
+// grant's rule exists only on the via-tagged node — so a viewer whose own
+// matchers never mention the peer must still see it when the peer's
+// matchers authorise the viewer. The snapshot peer map
+// ([policy.PolicyManager.BuildPeerMap]) already checks both nodes'
+// matchers; this live re-filter must apply the same semantics or peers
+// present in the snapshot are dropped from map responses.
+func (m *mapper) reducePeers(
+	node types.NodeView,
+	peers views.Slice[types.NodeView],
+	matchers []matcher.Match,
+) views.Slice[types.NodeView] {
+	// No matchers means no policy restrictions, so every peer is visible.
+	if len(matchers) == 0 {
+		return peers
+	}
+
+	var result []types.NodeView
+
+	for _, peer := range peers.All() {
+		if peer.ID() == node.ID() {
+			continue
+		}
+
+		if node.CanAccess(matchers, peer) || peer.CanAccess(matchers, node) {
+			result = append(result, peer)
+			continue
+		}
+
+		peerMatchers, err := m.state.MatchersForNode(peer)
+		if err != nil {
+			continue
+		}
+
+		// For global policies MatchersForNode returns the same shared
+		// slice for every node; re-checking it would repeat the work
+		// above verbatim.
+		if len(peerMatchers) > 0 && &peerMatchers[0] == &matchers[0] {
+			continue
+		}
+
+		if node.CanAccess(peerMatchers, peer) || peer.CanAccess(peerMatchers, node) {
+			result = append(result, peer)
+		}
+	}
+
+	return views.SliceOf(result)
+}
+
 // visiblePeerIDs returns the set of peer node IDs the recipient may see under
 // the current policy. It is the single visibility decision shared by the
 // incremental peer-change and user-profile paths, computed from the same live
-// per-node matchers and [policy.ReduceNodes] filter that
+// per-node matchers and [mapper.reducePeers] filter that
 // [MapResponseBuilder.buildTailPeers] applies to full peer objects, so the
 // paths cannot drift. The snapshot peer map ([NodeStore.ListPeers]) is used
 // only as the candidate set, matching buildTailPeers; the live policy decides
@@ -454,13 +505,7 @@ func (m *mapper) visiblePeerIDs(nodeID types.NodeID) (map[tailcfg.NodeID]struct{
 		return nil, false
 	}
 
-	peers := m.state.ListPeers(nodeID)
-
-	// No matchers means no policy restrictions, so every peer is visible —
-	// the same default buildTailPeers applies.
-	if len(matchers) > 0 {
-		peers = policy.ReduceNodes(node, peers, matchers)
-	}
+	peers := m.reducePeers(node, m.state.ListPeers(nodeID), matchers)
 
 	// Key by tailcfg.NodeID so the peer-patch path can look up by patch.NodeID
 	// directly, avoiding an unchecked int64->uint64 conversion.

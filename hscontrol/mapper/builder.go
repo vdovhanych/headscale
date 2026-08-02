@@ -268,13 +268,9 @@ func (b *MapResponseBuilder) buildTailPeers(peers views.Slice[types.NodeView]) (
 	}
 
 	// If there are filter rules present, see if there are any nodes that cannot
-	// access each-other at all and remove them from the peers.
-	var changedViews views.Slice[types.NodeView]
-	if len(matchers) > 0 {
-		changedViews = policy.ReduceNodes(node, peers, matchers)
-	} else {
-		changedViews = peers
-	}
+	// access each-other at all and remove them from the peers. Both the
+	// node's and each peer's matchers are consulted — see [mapper.reducePeers].
+	changedViews := b.mapper.reducePeers(node, peers, matchers)
 
 	// Snapshot the per-node policy CapMap once per peer-list build
 	// instead of locking the policy manager per peer. The per-call
